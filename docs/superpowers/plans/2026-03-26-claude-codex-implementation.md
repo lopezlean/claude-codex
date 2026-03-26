@@ -26,7 +26,7 @@
 - Create: `src/error.rs`
 - Test: `src/cli.rs`
 
-- [ ] **Step 1: Create the minimal crate scaffold required to run Rust tests**
+- [x] **Step 1: Create the minimal crate scaffold required to run Rust tests**
 
 ```toml
 # Cargo.toml
@@ -123,7 +123,7 @@ impl From<clap::Error> for AppError {
 }
 ```
 
-- [ ] **Step 2: Write the failing CLI parsing tests**
+- [x] **Step 2: Write the failing CLI parsing tests**
 
 ```rust
 // src/cli.rs
@@ -163,13 +163,13 @@ mod tests {
 }
 ```
 
-- [ ] **Step 3: Run the CLI tests to verify they fail for the expected reason**
+- [x] **Step 3: Run the CLI tests to verify they fail for the expected reason**
 
 Run: `cargo test cli::tests:: -- --nocapture`
 
 Expected: FAIL or compile error because `parse`, `ParsedCli`, or `AuthCommand` are not defined yet.
 
-- [ ] **Step 4: Implement the CLI parser with reserved management commands and passthrough run mode**
+- [x] **Step 4: Implement the CLI parser with reserved management commands and passthrough run mode**
 
 ```rust
 // src/cli.rs
@@ -256,13 +256,13 @@ fn parse_management(args: Vec<OsString>) -> Result<ParsedCli, AppError> {
 }
 ```
 
-- [ ] **Step 5: Run the CLI tests and the full suite for green**
+- [x] **Step 5: Run the CLI tests and the full suite for green**
 
 Run: `cargo test`
 
 Expected: PASS with 3 passing tests and no failures.
 
-- [ ] **Step 6: Commit the scaffold and CLI parsing slice**
+- [x] **Step 6: Commit the scaffold and CLI parsing slice**
 
 ```bash
 git add Cargo.toml src/main.rs src/cli.rs src/config.rs src/error.rs
@@ -279,7 +279,7 @@ git commit -m "feat: scaffold crate and parse cli modes"
 - Modify: `src/config.rs`
 - Test: `src/auth/session_store.rs`
 
-- [ ] **Step 1: Write the failing auth file compatibility tests**
+- [x] **Step 1: Write the failing auth file compatibility tests**
 
 ```rust
 // src/auth/session_store.rs
@@ -346,13 +346,13 @@ mod tests {
 }
 ```
 
-- [ ] **Step 2: Run the auth store tests to verify they fail**
+- [x] **Step 2: Run the auth store tests to verify they fail**
 
 Run: `cargo test auth::session_store::tests:: -- --nocapture`
 
 Expected: FAIL or compile error because the `auth` module and store types do not exist yet.
 
-- [ ] **Step 3: Implement the auth file types and atomic file store**
+- [x] **Step 3: Implement the auth file types and atomic file store**
 
 ```rust
 // src/auth/mod.rs
@@ -469,13 +469,13 @@ mod config;
 mod error;
 ```
 
-- [ ] **Step 4: Run the auth store tests and the full suite**
+- [x] **Step 4: Run the auth store tests and the full suite**
 
 Run: `cargo test`
 
 Expected: PASS with the CLI tests and the 2 new auth store tests passing.
 
-- [ ] **Step 5: Commit the auth file persistence slice**
+- [x] **Step 5: Commit the auth file persistence slice**
 
 ```bash
 git add Cargo.toml src/main.rs src/config.rs src/auth/mod.rs src/auth/session.rs src/auth/session_store.rs
@@ -492,7 +492,7 @@ git commit -m "feat: add codex auth file store"
 - Modify: `src/error.rs`
 - Test: `src/auth/openai.rs`
 
-- [ ] **Step 1: Write the failing OpenAI auth provider tests**
+- [x] **Step 1: Write the failing OpenAI auth provider tests**
 
 ```rust
 // src/auth/openai.rs
@@ -562,13 +562,13 @@ mod tests {
 }
 ```
 
-- [ ] **Step 2: Run the provider tests to verify they fail**
+- [x] **Step 2: Run the provider tests to verify they fail**
 
 Run: `cargo test auth::openai::tests::refreshes_an_expiring_session_and_persists_new_tokens -- --nocapture`
 
 Expected: FAIL or compile error because `AuthProvider` and `OpenAiAuthProvider` do not exist yet.
 
-- [ ] **Step 3: Implement the auth provider trait, OpenAI OAuth provider, and auth command dispatch**
+- [x] **Step 3: Implement the auth provider trait, OpenAI OAuth provider, and auth command dispatch**
 
 ```rust
 // src/auth/mod.rs
@@ -876,13 +876,13 @@ async fn main() -> Result<(), AppError> {
 }
 ```
 
-- [ ] **Step 4: Run the targeted provider test and the full suite**
+- [x] **Step 4: Run the targeted provider test and the full suite**
 
 Run: `cargo test`
 
 Expected: PASS with the new refresh test passing and previous tests still green.
 
-- [ ] **Step 5: Commit the OAuth provider slice**
+- [x] **Step 5: Commit the OAuth provider slice**
 
 ```bash
 git add src/main.rs src/error.rs src/auth/mod.rs src/auth/provider.rs src/auth/openai.rs
@@ -899,7 +899,7 @@ git commit -m "feat: add openai oauth provider"
 - Modify: `src/main.rs`
 - Test: `src/protocol/mapper.rs`
 
-- [ ] **Step 1: Write the failing mapper tests for text, tools, and model aliases**
+- [x] **Step 1: Write the failing mapper tests for text, tools, and model aliases**
 
 ```rust
 // src/protocol/mapper.rs
@@ -975,13 +975,13 @@ mod tests {
 }
 ```
 
-- [ ] **Step 2: Run the mapper tests to verify they fail**
+- [x] **Step 2: Run the mapper tests to verify they fail**
 
 Run: `cargo test protocol::mapper::tests:: -- --nocapture`
 
 Expected: FAIL or compile error because the protocol types and mapper do not exist yet.
 
-- [ ] **Step 3: Implement Anthropic/OpenAI types and pure mapping logic**
+- [x] **Step 3: Implement Anthropic/OpenAI types and pure mapping logic**
 
 ```rust
 // src/protocol/mod.rs
@@ -1196,13 +1196,13 @@ mod error;
 mod protocol;
 ```
 
-- [ ] **Step 4: Run the mapper tests and the full suite**
+- [x] **Step 4: Run the mapper tests and the full suite**
 
 Run: `cargo test`
 
 Expected: PASS with the new mapper tests green.
 
-- [ ] **Step 5: Commit the protocol mapping slice**
+- [x] **Step 5: Commit the protocol mapping slice**
 
 ```bash
 git add src/main.rs src/protocol/mod.rs src/protocol/anthropic.rs src/protocol/openai.rs src/protocol/mapper.rs
@@ -1223,7 +1223,7 @@ git commit -m "feat: map anthropic messages to openai chat"
 - Modify: `src/main.rs`
 - Test: `src/server.rs`
 
-- [ ] **Step 1: Write the failing server tests for health, token counting, and non-stream translation**
+- [x] **Step 1: Write the failing server tests for health, token counting, and non-stream translation**
 
 ```rust
 // src/server.rs
@@ -1344,13 +1344,13 @@ mod tests {
 }
 ```
 
-- [ ] **Step 2: Run the server tests to verify they fail**
+- [x] **Step 2: Run the server tests to verify they fail**
 
 Run: `cargo test server::tests:: -- --nocapture`
 
 Expected: FAIL or compile error because the backend, handlers, and router do not exist yet.
 
-- [ ] **Step 3: Implement the backend provider, handlers, and Axum router**
+- [x] **Step 3: Implement the backend provider, handlers, and Axum router**
 
 ```rust
 // src/backend/mod.rs
@@ -1586,13 +1586,13 @@ mod protocol;
 mod server;
 ```
 
-- [ ] **Step 4: Run the server tests and then the full suite**
+- [x] **Step 4: Run the server tests and then the full suite**
 
 Run: `cargo test`
 
 Expected: PASS with the 3 new server tests green.
 
-- [ ] **Step 5: Commit the server and non-stream proxy slice**
+- [x] **Step 5: Commit the server and non-stream proxy slice**
 
 ```bash
 git add src/main.rs src/backend/mod.rs src/backend/provider.rs src/backend/openai.rs src/handlers/mod.rs src/handlers/messages.rs src/handlers/count_tokens.rs src/handlers/health.rs src/server.rs
@@ -1609,7 +1609,7 @@ git commit -m "feat: add non-stream proxy endpoints"
 - Modify: `src/handlers/messages.rs`
 - Test: `src/protocol/stream.rs`
 
-- [ ] **Step 1: Write the failing stream translation tests**
+- [x] **Step 1: Write the failing stream translation tests**
 
 ```rust
 // src/protocol/stream.rs
@@ -1636,13 +1636,13 @@ mod tests {
 }
 ```
 
-- [ ] **Step 2: Run the stream tests to verify they fail**
+- [x] **Step 2: Run the stream tests to verify they fail**
 
 Run: `cargo test protocol::stream::tests:: -- --nocapture`
 
 Expected: FAIL because the stream translator does not exist yet.
 
-- [ ] **Step 3: Implement the SSE translator and wire it into the message handler**
+- [x] **Step 3: Implement the SSE translator and wire it into the message handler**
 
 ```rust
 // src/protocol/mod.rs
@@ -1832,13 +1832,13 @@ pub async fn create_message(
 }
 ```
 
-- [ ] **Step 4: Run the stream tests and the full suite**
+- [x] **Step 4: Run the stream tests and the full suite**
 
 Run: `cargo test`
 
 Expected: PASS with the 2 stream tests green and the previous server tests still green.
 
-- [ ] **Step 5: Commit the streaming translation slice**
+- [x] **Step 5: Commit the streaming translation slice**
 
 ```bash
 git add src/protocol/mod.rs src/protocol/stream.rs src/backend/provider.rs src/backend/openai.rs src/handlers/messages.rs
@@ -1854,7 +1854,7 @@ git commit -m "feat: translate openai streams to anthropic sse"
 - Modify: `src/main.rs`
 - Test: `tests/cli_wrapper.rs`
 
-- [ ] **Step 1: Write the failing wrapper integration test using a fake `claude` executable**
+- [x] **Step 1: Write the failing wrapper integration test using a fake `claude` executable**
 
 ```rust
 // tests/cli_wrapper.rs
@@ -1915,13 +1915,13 @@ fn run_mode_launches_claude_with_proxy_environment() {
 }
 ```
 
-- [ ] **Step 2: Run the wrapper test to verify it fails**
+- [x] **Step 2: Run the wrapper test to verify it fails**
 
 Run: `cargo test --test cli_wrapper -- --nocapture`
 
 Expected: FAIL because the run mode does not start the proxy or spawn the `claude` process yet.
 
-- [ ] **Step 3: Implement process launch, random free port allocation, and graceful shutdown**
+- [x] **Step 3: Implement process launch, random free port allocation, and graceful shutdown**
 
 ```rust
 // src/config.rs
@@ -2073,13 +2073,13 @@ async fn main() -> Result<(), AppError> {
 }
 ```
 
-- [ ] **Step 4: Run the wrapper integration test and the full suite**
+- [x] **Step 4: Run the wrapper integration test and the full suite**
 
 Run: `cargo test`
 
 Expected: PASS with the wrapper test green and earlier unit/integration tests still green.
 
-- [ ] **Step 5: Commit the wrapper launch slice**
+- [x] **Step 5: Commit the wrapper launch slice**
 
 ```bash
 git add src/config.rs src/process.rs src/server.rs src/main.rs tests/cli_wrapper.rs
@@ -2097,7 +2097,7 @@ git commit -m "feat: launch claude through local proxy"
 - Test: `tests/proxy_errors.rs`
 - Test: `src/protocol/stream.rs`
 
-- [ ] **Step 1: Write the failing regression tests for upstream errors and streaming stop events**
+- [x] **Step 1: Write the failing regression tests for upstream errors and streaming stop events**
 
 ```rust
 // tests/proxy_errors.rs
@@ -2154,13 +2154,13 @@ mod regression_tests {
 }
 ```
 
-- [ ] **Step 2: Run the new regression tests to verify they fail or expose missing behavior**
+- [x] **Step 2: Run the new regression tests to verify they fail or expose missing behavior**
 
 Run: `cargo test --test proxy_errors protocol::stream::regression_tests::done_marker_produces_message_stop_event -- --nocapture`
 
 Expected: FAIL until the error reporting and streaming edge handling are fully wired.
 
-- [ ] **Step 3: Implement final error shaping and regression fixes**
+- [x] **Step 3: Implement final error shaping and regression fixes**
 
 ```rust
 // src/error.rs
@@ -2218,7 +2218,7 @@ fn internal_error(error: impl std::fmt::Display) -> (StatusCode, String) {
 }
 ```
 
-- [ ] **Step 4: Run the full verification commands**
+- [x] **Step 4: Run the full verification commands**
 
 Run: `cargo fmt --check`
 Expected: PASS
@@ -2229,7 +2229,7 @@ Expected: PASS with all unit, server, and integration tests green
 Run: `cargo run -- auth status`
 Expected: PASS with a readable status line even when the auth file is missing
 
-- [ ] **Step 5: Commit the hardening slice**
+- [x] **Step 5: Commit the hardening slice**
 
 ```bash
 git add src/error.rs src/process.rs src/handlers/messages.rs src/protocol/stream.rs tests/proxy_errors.rs
