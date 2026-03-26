@@ -1,4 +1,5 @@
 use anyhow::Result;
+use serde_json::{json, Value};
 
 use crate::protocol::anthropic::{AnthropicContentBlock, AnthropicMessagesRequest, ToolChoice};
 use crate::protocol::openai::{
@@ -99,6 +100,54 @@ pub fn map_anthropic_to_openai(request: &AnthropicMessagesRequest) -> Result<Ope
     })
 }
 
+pub fn map_openai_to_anthropic_response(model: &str, response: &Value) -> Result<Value> {
+    let message = response
+        .pointer("/choices/0/message")
+        .and_then(Value::as_object)
+        .cloned()
+        .unwrap_or_default();
+
+    let mut content = Vec::new();
+    if let Some(text) = message.get("content").and_then(Value::as_str) {
+        if !text.is_empty() {
+            content.push(json!({
+                "type": "text",
+                "text": text,
+            }));
+        }
+    }
+
+    let tool_calls = message
+        .get("tool_calls")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+
+    for tool_call in &tool_calls {
+        let input = tool_call
+            .pointer("/function/arguments")
+            .and_then(Value::as_str)
+            .map(serde_json::from_str)
+            .transpose()?
+            .unwrap_or(Value::Object(Default::default()));
+        content.push(json!({
+            "type": "tool_use",
+            "id": tool_call.get("id").and_then(Value::as_str).unwrap_or_default(),
+            "name": tool_call.pointer("/function/name").and_then(Value::as_str).unwrap_or_default(),
+            "input": input,
+        }));
+    }
+
+    Ok(json!({
+        "id": response.get("id").and_then(Value::as_str).unwrap_or("msg_codex_proxy"),
+        "type": "message",
+        "role": "assistant",
+        "model": model,
+        "content": content,
+        "stop_reason": if tool_calls.is_empty() { "end_turn" } else { "tool_use" }
+    }))
+}
+
 fn map_tool_choice(choice: &ToolChoice) -> OpenAiToolChoice {
     match choice {
         ToolChoice::Auto => OpenAiToolChoice::Auto,
@@ -129,7 +178,7 @@ fn push_role_message(
 mod tests {
     use serde_json::json;
 
-    use super::{map_anthropic_to_openai, map_model_name};
+    use super::{map_anthropic_to_openai, map_model_name, map_openai_to_anthropic_response};
     use crate::protocol::anthropic::{
         AnthropicContentBlock, AnthropicMessage, AnthropicMessagesRequest, ToolChoice,
     };
@@ -281,5 +330,37 @@ mod tests {
     #[test]
     fn falls_back_to_default_model_for_unknown_claude_alias() {
         assert_eq!(map_model_name("claude-unknown"), "gpt-4o");
+    }
+
+    #[test]
+    fn maps_openai_tool_calls_to_anthropic_tool_use_blocks() {
+        let response = json!({
+            "id": "chatcmpl_tool",
+            "choices": [{
+                "message": {
+                    "role": "assistant",
+                    "content": "I will use a tool",
+                    "tool_calls": [{
+                        "id": "call_lookup_weather",
+                        "type": "function",
+                        "function": {
+                            "name": "lookup_weather",
+                            "arguments": "{\"city\":\"Madrid\"}"
+                        }
+                    }]
+                }
+            }]
+        });
+
+        let mapped = map_openai_to_anthropic_response("claude-3-5-sonnet-latest", &response)
+            .expect("response mapping should work");
+        assert_eq!(mapped["id"], "chatcmpl_tool");
+        assert_eq!(mapped["stop_reason"], "tool_use");
+        assert_eq!(mapped["content"][0]["type"], "text");
+        assert_eq!(mapped["content"][0]["text"], "I will use a tool");
+        assert_eq!(mapped["content"][1]["type"], "tool_use");
+        assert_eq!(mapped["content"][1]["id"], "call_lookup_weather");
+        assert_eq!(mapped["content"][1]["name"], "lookup_weather");
+        assert_eq!(mapped["content"][1]["input"]["city"], "Madrid");
     }
 }

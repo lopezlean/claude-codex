@@ -4,10 +4,9 @@ use axum::response::{IntoResponse, Response};
 use axum::{extract::State, Json};
 use bytes::Bytes;
 use futures_util::StreamExt;
-use serde_json::json;
 
 use crate::protocol::anthropic::AnthropicMessagesRequest;
-use crate::protocol::mapper::map_anthropic_to_openai;
+use crate::protocol::mapper::{map_anthropic_to_openai, map_openai_to_anthropic_response};
 use crate::protocol::stream::translate_openai_sse_frame;
 use crate::server::AppState;
 
@@ -49,25 +48,8 @@ pub async fn create_message(
         return Err((StatusCode::BAD_GATEWAY, upstream.body.to_string()));
     }
 
-    let assistant_text = upstream
-        .body
-        .pointer("/choices/0/message/content")
-        .and_then(|value| value.as_str())
-        .unwrap_or_default();
-
-    let body = json!({
-        "id": "msg_codex_proxy",
-        "type": "message",
-        "role": "assistant",
-        "model": request.model,
-        "content": [
-            {
-                "type": "text",
-                "text": assistant_text
-            }
-        ],
-        "stop_reason": "end_turn"
-    });
+    let body =
+        map_openai_to_anthropic_response(&request.model, &upstream.body).map_err(internal_error)?;
 
     Ok(axum::Json(body).into_response())
 }
