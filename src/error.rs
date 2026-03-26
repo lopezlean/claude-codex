@@ -2,6 +2,8 @@ use thiserror::Error;
 
 #[derive(Debug, Error)]
 pub enum AppError {
+    #[error(transparent)]
+    Anyhow(#[from] anyhow::Error),
     #[error("{0}")]
     Message(String),
 }

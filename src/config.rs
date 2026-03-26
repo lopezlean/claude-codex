@@ -3,6 +3,7 @@ use std::path::PathBuf;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AppConfig {
     pub auth_file: PathBuf,
+    pub callback_port: u16,
 }
 
 impl AppConfig {
@@ -13,6 +14,7 @@ impl AppConfig {
             .expect("HOME must be set to resolve ~/.codex/auth.json");
         Self {
             auth_file: home.join(".codex").join("auth.json"),
+            callback_port: 1455,
         }
     }
 }
