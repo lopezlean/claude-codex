@@ -1,7 +1,8 @@
 use anyhow::Result;
+use futures_util::StreamExt;
 use reqwest::Client;
 
-use crate::backend::provider::{BackendProvider, UpstreamResponse};
+use crate::backend::provider::{BackendProvider, UpstreamResponse, UpstreamStream};
 use crate::protocol::openai::OpenAiChatRequest;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -45,5 +46,28 @@ impl BackendProvider for OpenAiBackendProvider {
         let status = response.status();
         let body = response.json().await?;
         Ok(UpstreamResponse { status, body })
+    }
+
+    async fn send_chat_stream(
+        &self,
+        access_token: &str,
+        request: &OpenAiChatRequest,
+    ) -> Result<UpstreamStream> {
+        let response = self
+            .client
+            .post(format!(
+                "{}{}",
+                self.config.base_url, self.config.chat_completions_path
+            ))
+            .bearer_auth(access_token)
+            .json(request)
+            .send()
+            .await?
+            .error_for_status()?;
+        Ok(Box::pin(
+            response
+                .bytes_stream()
+                .map(|chunk| chunk.map_err(anyhow::Error::from)),
+        ))
     }
 }
