@@ -114,6 +114,58 @@ fn run_mode_routes_all_model_tiers_to_the_selected_model() {
     assert!(captured.contains("SUBAGENT=claude-3-5-sonnet-latest"));
 }
 
+#[test]
+fn run_mode_defaults_all_model_tiers_to_supported_sonnet_alias() {
+    let dir = tempdir().expect("temp dir");
+    let bin_dir = dir.path().join("bin");
+    let home_dir = dir.path().join("home");
+    let capture_path = dir.path().join("capture.txt");
+    fs::create_dir_all(&bin_dir).expect("bin dir");
+    fs::create_dir_all(home_dir.join(".codex")).expect("auth dir");
+    fs::write(
+        home_dir.join(".codex").join("auth.json"),
+        json!({
+            "auth_mode": "openai",
+            "tokens": {
+                "access_token": "access-token"
+            },
+            "last_refresh": "123"
+        })
+        .to_string(),
+    )
+    .expect("auth file");
+
+    let script = format!(
+        "#!/bin/sh\nprintf 'OPUS=%s\\nSONNET=%s\\nHAIKU=%s\\nSUBAGENT=%s\\n' \"$ANTHROPIC_DEFAULT_OPUS_MODEL\" \"$ANTHROPIC_DEFAULT_SONNET_MODEL\" \"$ANTHROPIC_DEFAULT_HAIKU_MODEL\" \"$CLAUDE_CODE_SUBAGENT_MODEL\" > \"{}\"\n",
+        capture_path.display()
+    );
+    let claude_path = bin_dir.join("claude");
+    fs::write(&claude_path, script).expect("script");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = fs::metadata(&claude_path).unwrap().permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(&claude_path, perms).unwrap();
+    }
+
+    Command::cargo_bin("claude-codex")
+        .expect("binary")
+        .env("HOME", &home_dir)
+        .env(
+            "PATH",
+            format!("{}:{}", bin_dir.display(), std::env::var("PATH").unwrap()),
+        )
+        .assert()
+        .success();
+
+    let captured = fs::read_to_string(capture_path).expect("capture");
+    assert!(captured.contains("OPUS=claude-3-5-sonnet-latest"));
+    assert!(captured.contains("SONNET=claude-3-5-sonnet-latest"));
+    assert!(captured.contains("HAIKU=claude-3-5-sonnet-latest"));
+    assert!(captured.contains("SUBAGENT=claude-3-5-sonnet-latest"));
+}
+
 #[cfg(unix)]
 #[test]
 fn run_mode_stops_the_child_when_the_wrapper_is_interrupted() {

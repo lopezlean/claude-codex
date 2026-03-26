@@ -9,6 +9,8 @@ use tokio::process::{Child, Command};
 
 use crate::error::AppError;
 
+const DEFAULT_CLAUDE_MODEL_ALIAS: &str = "claude-3-5-sonnet-latest";
+
 pub fn reserve_local_port() -> Result<u16> {
     let listener = TcpListener::bind(("127.0.0.1", 0))?;
     let port = listener.local_addr()?.port();
@@ -19,7 +21,7 @@ pub fn reserve_local_port() -> Result<u16> {
 pub fn spawn_claude(binary: &str, port: u16, args: &[OsString]) -> Result<Child, AppError> {
     let base_url = format!("http://127.0.0.1:{port}/v1");
     let claude_path = resolve_claude_binary(binary)?;
-    let model = selected_model(args).unwrap_or_default();
+    let model = selected_model(args).unwrap_or_else(|| DEFAULT_CLAUDE_MODEL_ALIAS.to_string());
 
     Command::new(claude_path)
         .args(args)
