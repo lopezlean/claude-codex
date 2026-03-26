@@ -6,6 +6,8 @@ use anyhow::{bail, Result};
 pub struct AppConfig {
     pub auth_file: PathBuf,
     pub callback_port: u16,
+    pub claude_binary: String,
+    pub upstream_base_url: String,
 }
 
 impl AppConfig {
@@ -14,6 +16,8 @@ impl AppConfig {
         Ok(Self {
             auth_file: home.join(".codex").join("auth.json"),
             callback_port: 1455,
+            claude_binary: "claude".to_string(),
+            upstream_base_url: "https://api.openai.com".to_string(),
         })
     }
 }

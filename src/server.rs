@@ -45,6 +45,12 @@ pub fn build_router(state: AppState) -> Router {
         .with_state(state)
 }
 
+pub async fn serve(state: AppState, port: u16) -> anyhow::Result<()> {
+    let listener = tokio::net::TcpListener::bind(("127.0.0.1", port)).await?;
+    axum::serve(listener, build_router(state)).await?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use axum::body::Body;
