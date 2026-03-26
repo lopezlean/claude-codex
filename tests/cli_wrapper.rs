@@ -17,7 +17,7 @@ fn run_mode_launches_claude_with_proxy_environment() {
         json!({
             "auth_mode": "openai",
             "tokens": {
-                "access_token": "access-token"
+                "access_token": "ey.test.token"
             },
             "last_refresh": "123"
         })
@@ -58,7 +58,7 @@ fn run_mode_launches_claude_with_proxy_environment() {
     assert!(captured.contains("TOKEN=claude-codex-proxy"));
     assert!(captured.contains("KEY="));
     assert!(captured.contains("ATTR=0"));
-    assert!(captured.contains("ARGS=--model gpt-5-codex-mini --print hello"));
+    assert!(captured.contains("ARGS=--model gpt-5.4 --print hello"));
 }
 
 #[test]
@@ -74,7 +74,7 @@ fn run_mode_uses_selected_backend_model_for_args_and_model_tiers() {
         json!({
             "auth_mode": "openai",
             "tokens": {
-                "access_token": "access-token"
+                "access_token": "ey.test.token"
             },
             "last_refresh": "123"
         })
@@ -104,18 +104,18 @@ fn run_mode_uses_selected_backend_model_for_args_and_model_tiers() {
             format!("{}:{}", bin_dir.display(), std::env::var("PATH").unwrap()),
         )
         .arg("--model")
-        .arg("gpt-4o-mini")
+        .arg("gpt-5.4-mini")
         .arg("--print")
         .arg("hello")
         .assert()
         .success();
 
     let captured = fs::read_to_string(capture_path).expect("capture");
-    assert!(captured.contains("OPUS=gpt-4o-mini"));
-    assert!(captured.contains("SONNET=gpt-4o-mini"));
-    assert!(captured.contains("HAIKU=gpt-4o-mini"));
-    assert!(captured.contains("SUBAGENT=gpt-4o-mini"));
-    assert!(captured.contains("ARGS=--model gpt-4o-mini --print hello"));
+    assert!(captured.contains("OPUS=gpt-5.4-mini"));
+    assert!(captured.contains("SONNET=gpt-5.4-mini"));
+    assert!(captured.contains("HAIKU=gpt-5.4-mini"));
+    assert!(captured.contains("SUBAGENT=gpt-5.4-mini"));
+    assert!(captured.contains("ARGS=--model gpt-5.4-mini --print hello"));
 }
 
 #[test]
@@ -131,7 +131,7 @@ fn run_mode_defaults_all_model_tiers_to_default_backend_model() {
         json!({
             "auth_mode": "openai",
             "tokens": {
-                "access_token": "access-token"
+                "access_token": "ey.test.token"
             },
             "last_refresh": "123"
         })
@@ -164,11 +164,11 @@ fn run_mode_defaults_all_model_tiers_to_default_backend_model() {
         .success();
 
     let captured = fs::read_to_string(capture_path).expect("capture");
-    assert!(captured.contains("OPUS=gpt-5-codex-mini"));
-    assert!(captured.contains("SONNET=gpt-5-codex-mini"));
-    assert!(captured.contains("HAIKU=gpt-5-codex-mini"));
-    assert!(captured.contains("SUBAGENT=gpt-5-codex-mini"));
-    assert!(captured.contains("ARGS=--model gpt-5-codex-mini"));
+    assert!(captured.contains("OPUS=gpt-5.4"));
+    assert!(captured.contains("SONNET=gpt-5.4"));
+    assert!(captured.contains("HAIKU=gpt-5.4"));
+    assert!(captured.contains("SUBAGENT=gpt-5.4"));
+    assert!(captured.contains("ARGS=--model gpt-5.4"));
 }
 
 #[cfg(unix)]
@@ -191,7 +191,7 @@ fn run_mode_stops_the_child_when_the_wrapper_is_interrupted() {
         json!({
             "auth_mode": "openai",
             "tokens": {
-                "access_token": "access-token"
+                "access_token": "ey.test.token"
             },
             "last_refresh": "123"
         })
@@ -265,4 +265,70 @@ fn run_mode_stops_the_child_when_the_wrapper_is_interrupted() {
         );
         thread::sleep(Duration::from_millis(50));
     }
+}
+
+#[test]
+fn run_mode_rejects_models_outside_the_active_backend_catalog() {
+    let dir = tempdir().expect("temp dir");
+    let bin_dir = dir.path().join("bin");
+    let home_dir = dir.path().join("home");
+    fs::create_dir_all(&bin_dir).expect("bin dir");
+    fs::create_dir_all(home_dir.join(".codex")).expect("auth dir");
+    fs::write(
+        home_dir.join(".codex").join("auth.json"),
+        json!({
+            "auth_mode": "openai",
+            "tokens": {
+                "access_token": "ey.test.token"
+            },
+            "last_refresh": "123"
+        })
+        .to_string(),
+    )
+    .expect("auth file");
+
+    Command::cargo_bin("claude-codex")
+        .expect("binary")
+        .env("HOME", &home_dir)
+        .env("PATH", &bin_dir)
+        .arg("--model")
+        .arg("gpt-4o")
+        .assert()
+        .failure()
+        .stderr(predicates::str::contains(
+            "unsupported model 'gpt-4o' for codex backend",
+        ));
+}
+
+#[test]
+fn models_list_prints_the_active_backend_catalog() {
+    let dir = tempdir().expect("temp dir");
+    let bin_dir = dir.path().join("bin");
+    let home_dir = dir.path().join("home");
+    fs::create_dir_all(&bin_dir).expect("bin dir");
+    fs::create_dir_all(home_dir.join(".codex")).expect("auth dir");
+    fs::write(
+        home_dir.join(".codex").join("auth.json"),
+        json!({
+            "auth_mode": "openai",
+            "tokens": {
+                "access_token": "ey.test.token"
+            },
+            "last_refresh": "123"
+        })
+        .to_string(),
+    )
+    .expect("auth file");
+
+    Command::cargo_bin("claude-codex")
+        .expect("binary")
+        .env("HOME", &home_dir)
+        .env("PATH", &bin_dir)
+        .arg("models")
+        .arg("list")
+        .assert()
+        .success()
+        .stdout(predicates::str::contains("gpt-5.4 (default)"))
+        .stdout(predicates::str::contains("gpt-5.4-mini"))
+        .stdout(predicates::str::contains("gpt-5.3-codex"));
 }

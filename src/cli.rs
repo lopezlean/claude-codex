@@ -6,6 +6,7 @@ use crate::error::AppError;
 pub enum ParsedCli {
     Run { claude_args: Vec<OsString> },
     Auth { command: AuthCommand },
+    Models { command: ModelsCommand },
     ProxyServe,
 }
 
@@ -16,6 +17,11 @@ pub enum AuthCommand {
     Logout,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ModelsCommand {
+    List,
+}
+
 pub fn parse<I, T>(args: I) -> Result<ParsedCli, AppError>
 where
     I: IntoIterator<Item = T>,
@@ -24,10 +30,33 @@ where
     let collected: Vec<OsString> = args.into_iter().map(Into::into).collect();
     match collected.get(1).and_then(|value| value.to_str()) {
         Some("auth") => parse_auth(&collected),
+        Some("models") => parse_models(&collected),
         Some("proxy") => parse_proxy(&collected),
         _ => Ok(ParsedCli::Run {
             claude_args: collected.into_iter().skip(1).collect(),
         }),
+    }
+}
+
+fn parse_models(args: &[OsString]) -> Result<ParsedCli, AppError> {
+    let subcommand = args
+        .get(2)
+        .and_then(|value| value.to_str())
+        .ok_or_else(|| AppError::Message("missing models subcommand".to_string()))?;
+
+    if args.len() != 3 {
+        return Err(AppError::Message(format!(
+            "models {subcommand} does not accept trailing arguments"
+        )));
+    }
+
+    match subcommand {
+        "list" => Ok(ParsedCli::Models {
+            command: ModelsCommand::List,
+        }),
+        _ => Err(AppError::Message(format!(
+            "unknown models subcommand: {subcommand}"
+        ))),
     }
 }
 
@@ -81,7 +110,7 @@ fn parse_proxy(args: &[OsString]) -> Result<ParsedCli, AppError> {
 
 #[cfg(test)]
 mod tests {
-    use super::{parse, AuthCommand, ParsedCli};
+    use super::{parse, AuthCommand, ModelsCommand, ParsedCli};
 
     #[test]
     fn parses_auth_login_command() {
@@ -114,6 +143,17 @@ mod tests {
     }
 
     #[test]
+    fn parses_models_list_command() {
+        let parsed = parse(["claude-codex", "models", "list"]).expect("models list should parse");
+        assert_eq!(
+            parsed,
+            ParsedCli::Models {
+                command: ModelsCommand::List,
+            }
+        );
+    }
+
+    #[test]
     fn rejects_bad_auth_commands() {
         for args in [
             vec!["claude-codex", "auth"],
@@ -137,6 +177,20 @@ mod tests {
             assert!(
                 parse(args.clone()).is_err(),
                 "unexpectedly parsed proxy args: {args:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_bad_models_commands() {
+        for args in [
+            vec!["claude-codex", "models"],
+            vec!["claude-codex", "models", "bogus"],
+            vec!["claude-codex", "models", "list", "extra"],
+        ] {
+            assert!(
+                parse(args.clone()).is_err(),
+                "unexpectedly parsed models args: {args:?}"
             );
         }
     }

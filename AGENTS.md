@@ -34,6 +34,7 @@ The codebase is a single Rust binary with a few clear layers:
 - `cargo run -- auth login`
 - `cargo run -- auth status`
 - `cargo run -- auth logout`
+- `cargo run -- models list`
 - `cargo run --`
 - `cargo run -- proxy serve`
 - `./run.sh test`
@@ -45,7 +46,12 @@ When the wrapper runs normally, it reserves a free loopback port, waits for the 
 - `ANTHROPIC_AUTH_TOKEN=claude-codex-proxy`
 - `CLAUDE_CODE_ATTRIBUTION_HEADER=0`
 
-The current launcher default model is `gpt-5-codex-mini` when the user does not pass `--model`.
+Model selection is backend-aware:
+
+- Codex sessions default to `gpt-5.4`
+- Chat Completions sessions default to `gpt-4o`
+- `cargo run -- models list` prints the active backend catalog
+- unsupported models must fail before `claude` is launched
 
 ## Working Conventions
 
@@ -59,6 +65,7 @@ The current launcher default model is `gpt-5-codex-mini` when the user does not 
 ## Where To Edit
 
 - Launcher or process changes: `src/process.rs` and `src/main.rs`
+- Model registry or backend-aware defaults: `src/models.rs`
 - Auth changes: `src/auth/`
 - Proxy routing or HTTP behavior: `src/server.rs` and `src/handlers/`
 - Anthropic/OpenAI request mapping: `src/protocol/mapper.rs`

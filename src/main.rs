@@ -4,6 +4,7 @@ mod cli;
 mod config;
 mod error;
 mod handlers;
+mod models;
 mod process;
 mod protocol;
 mod server;
@@ -16,10 +17,15 @@ use crate::auth::openai::{OpenAiAuthConfig, OpenAiAuthProvider};
 use crate::auth::provider::AuthProvider;
 use crate::auth::session_store::FileSessionStore;
 use crate::backend::openai::{OpenAiBackendConfig, OpenAiBackendProvider};
-use crate::cli::{AuthCommand, ParsedCli};
+use crate::cli::{AuthCommand, ModelsCommand, ParsedCli};
 use crate::config::AppConfig;
 use crate::error::AppError;
-use crate::process::{reserve_local_port, spawn_claude, terminate_claude, wait_for_claude};
+use crate::models::{
+    available_models_for, backend_kind_for_token, default_model_for, resolve_model,
+};
+use crate::process::{
+    reserve_local_port, spawn_claude, split_model_arg, terminate_claude, wait_for_claude,
+};
 use crate::server::{serve, wait_until_ready, AppState};
 use tokio::task::JoinHandle;
 
@@ -55,7 +61,10 @@ async fn run() -> Result<(), AppError> {
 
     match cli {
         ParsedCli::Run { claude_args } => {
-            auth.ensure_access_token().await?;
+            let access_token = auth.ensure_access_token().await?;
+            let backend_kind = backend_kind_for_token(&access_token)?;
+            let (extra_args, requested_model) = split_model_arg(&claude_args);
+            let backend_model = resolve_model(backend_kind, requested_model.as_deref())?;
             let port = reserve_local_port()?;
             let state = AppState { auth, backend };
             let server_task: JoinHandle<anyhow::Result<()>> = tokio::spawn(serve(state, port));
@@ -63,7 +72,7 @@ async fn run() -> Result<(), AppError> {
                 server_task.abort();
                 return Err(AppError::Anyhow(error));
             }
-            let mut child = spawn_claude(&config.claude_binary, port, &claude_args)?;
+            let mut child = spawn_claude(&config.claude_binary, port, &extra_args, &backend_model)?;
             let run_result = tokio::select! {
                 result = wait_for_claude(&mut child) => result,
                 signal = tokio::signal::ctrl_c() => {
@@ -89,6 +98,23 @@ async fn run() -> Result<(), AppError> {
                     );
                 }
                 AuthCommand::Logout => auth.logout().await?,
+            }
+            Ok(())
+        }
+        ParsedCli::Models { command } => {
+            match command {
+                ModelsCommand::List => {
+                    let access_token = auth.ensure_access_token().await?;
+                    let backend_kind = backend_kind_for_token(&access_token)?;
+                    let default = default_model_for(backend_kind);
+                    for model in available_models_for(backend_kind) {
+                        if *model == default {
+                            println!("{model} (default)");
+                        } else {
+                            println!("{model}");
+                        }
+                    }
+                }
             }
             Ok(())
         }

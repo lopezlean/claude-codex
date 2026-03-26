@@ -9,8 +9,6 @@ use tokio::process::{Child, Command};
 
 use crate::error::AppError;
 
-const DEFAULT_BACKEND_MODEL: &str = "gpt-5-codex-mini";
-
 pub fn reserve_local_port() -> Result<u16> {
     let listener = TcpListener::bind(("127.0.0.1", 0))?;
     let port = listener.local_addr()?.port();
@@ -18,12 +16,15 @@ pub fn reserve_local_port() -> Result<u16> {
     Ok(port)
 }
 
-pub fn spawn_claude(binary: &str, port: u16, args: &[OsString]) -> Result<Child, AppError> {
+pub fn spawn_claude(
+    binary: &str,
+    port: u16,
+    extra_args: &[OsString],
+    backend_model: &str,
+) -> Result<Child, AppError> {
     let base_url = format!("http://127.0.0.1:{port}");
     let claude_path = resolve_claude_binary(binary)?;
-    let (extra_args, selected_model) = extract_selected_model(args);
-    let backend_model = selected_model.unwrap_or_else(|| DEFAULT_BACKEND_MODEL.to_string());
-    let child_args = build_claude_args(&backend_model, &extra_args);
+    let child_args = build_claude_args(backend_model, extra_args);
 
     Command::new(claude_path)
         .args(&child_args)
@@ -45,7 +46,7 @@ pub fn spawn_claude(binary: &str, port: u16, args: &[OsString]) -> Result<Child,
         })
 }
 
-fn extract_selected_model(args: &[OsString]) -> (Vec<OsString>, Option<String>) {
+pub fn split_model_arg(args: &[OsString]) -> (Vec<OsString>, Option<String>) {
     let mut forwarded_args = Vec::new();
     let mut selected_model = None;
     let mut index = 0;

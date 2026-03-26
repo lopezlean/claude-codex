@@ -17,7 +17,7 @@ fn run_mode_reports_missing_claude_binary_cleanly() {
         json!({
             "auth_mode": "openai",
             "tokens": {
-                "access_token": "access-token"
+                "access_token": "ey.test.token"
             },
             "last_refresh": "123"
         })
@@ -55,7 +55,7 @@ fn run_mode_falls_back_to_local_claude_install_when_path_is_missing() {
         json!({
             "auth_mode": "openai",
             "tokens": {
-                "access_token": "access-token"
+                "access_token": "ey.test.token"
             },
             "last_refresh": "123"
         })

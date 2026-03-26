@@ -4,6 +4,12 @@
 
 It is designed to give Claude Code users a local launch experience while keeping the backend pluggable for future AI providers.
 
+## Why claude-codex?
+
+Claude Code is an incredible tool, but it's locked into a single provider. Many of us use a mix of models (like OpenAI) and want to keep using the superior Claude Code interface without being forced to switch contexts or tools.
+
+claude-codex was born to bridge that gap: keep the UI you love, use the models you need.
+
 ## Current Status
 
 The current implementation supports:
@@ -77,6 +83,12 @@ Use the helper script for the common paths:
 ./run.sh proxy
 ```
 
+List the models available for the active backend:
+
+```bash
+cargo run -- models list
+```
+
 When `claude-codex` launches Claude Code, it starts the local proxy, waits until it is ready, and then sets the environment Claude Code expects:
 
 - `ANTHROPIC_BASE_URL`
@@ -87,13 +99,22 @@ When `claude-codex` launches Claude Code, it starts the local proxy, waits until
 
 ## Current Model Behavior
 
-Model handling is intentionally simple today.
+Model handling is backend-aware.
 
-- If you do not pass `--model`, the launcher currently defaults to `gpt-5-codex-mini`.
-- If you do pass `--model`, that value is forwarded to Claude Code and used for the backend model environment variables.
-- The planned model catalog and backend-specific chooser are documented separately, but they are not implemented yet.
+- For Codex-backed OAuth/JWT sessions, the launcher defaults to `gpt-5.4`.
+- For Chat Completions API-key sessions, the launcher defaults to `gpt-4o`.
+- If you pass `--model`, `claude-codex` validates it against the active backend catalog before launching `claude`.
+- `cargo run -- models list` prints the supported models for the active backend and marks the default.
 
-This means the launcher behaves like a thin wrapper today rather than a model picker.
+Current Codex catalog:
+
+- `gpt-5.4`
+- `gpt-5.4-mini`
+- `gpt-5.3-codex`
+- `gpt-5.2-codex`
+- `gpt-5.2`
+- `gpt-5.1-codex-max`
+- `gpt-5.1-codex-mini`
 
 ## Architecture
 
@@ -121,6 +142,5 @@ The repository also includes design notes under `docs/superpowers/specs/` for th
 ## Limitations
 
 - The proxy is local only.
-- Model selection is not catalog-driven yet.
 - `count_tokens` is a local estimate, not a provider tokenizer call.
 - The project currently focuses on OpenAI-compatible backends and does not claim full Anthropic feature parity.
