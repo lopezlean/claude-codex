@@ -10,19 +10,21 @@ use crate::protocol::openai::{
 const DEFAULT_MODEL: &str = "gpt-4o";
 const HAIKU_MODEL: &str = "gpt-4o-mini";
 
-pub fn map_model_name(model: &str) -> &'static str {
+pub fn map_model_name(model: &str) -> String {
     let normalized = model.trim().to_ascii_lowercase();
 
     if normalized == "haiku" || normalized.contains("haiku") {
-        HAIKU_MODEL
+        HAIKU_MODEL.to_string()
     } else if normalized == "sonnet"
         || normalized == "opus"
         || normalized.contains("sonnet")
         || normalized.contains("opus")
     {
-        DEFAULT_MODEL
+        DEFAULT_MODEL.to_string()
+    } else if normalized.starts_with("claude") {
+        DEFAULT_MODEL.to_string()
     } else {
-        DEFAULT_MODEL
+        model.to_string()
     }
 }
 
@@ -97,7 +99,7 @@ pub fn map_anthropic_to_openai(request: &AnthropicMessagesRequest) -> Result<Ope
         .collect();
 
     Ok(OpenAiChatRequest {
-        model: map_model_name(&request.model).to_string(),
+        model: map_model_name(&request.model),
         messages,
         tools,
         tool_choice: request.tool_choice.as_ref().map(map_tool_choice),
@@ -418,6 +420,27 @@ mod tests {
         assert_eq!(map_model_name("claude-sonnet-4-20250514"), "gpt-4o");
         assert_eq!(map_model_name("claude-opus-4-1-20250805"), "gpt-4o");
         assert_eq!(map_model_name("claude-3-5-haiku-20241022"), "gpt-4o-mini");
+    }
+
+    #[test]
+    fn preserves_openai_compatible_model_names_without_remapping() {
+        let request = AnthropicMessagesRequest {
+            model: "gpt-4o-mini".to_string(),
+            system: None,
+            max_tokens: Some(64),
+            stream: false,
+            tools: vec![],
+            tool_choice: None,
+            messages: vec![AnthropicMessage {
+                role: "user".to_string(),
+                content: vec![AnthropicContentBlock::Text {
+                    text: "Hello".to_string(),
+                }],
+            }],
+        };
+
+        let mapped = map_anthropic_to_openai(&request).expect("mapping should work");
+        assert_eq!(mapped.model, "gpt-4o-mini");
     }
 
     #[test]

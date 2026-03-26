@@ -57,11 +57,11 @@ fn run_mode_launches_claude_with_proxy_environment() {
     assert!(captured.contains("TOKEN=claude-codex-proxy"));
     assert!(captured.contains("KEY="));
     assert!(captured.contains("ATTR=0"));
-    assert!(captured.contains("ARGS=--print hello"));
+    assert!(captured.contains("ARGS=--model gpt-4o --print hello"));
 }
 
 #[test]
-fn run_mode_normalizes_legacy_model_flags_for_claude_code() {
+fn run_mode_uses_selected_backend_model_for_args_and_model_tiers() {
     let dir = tempdir().expect("temp dir");
     let bin_dir = dir.path().join("bin");
     let home_dir = dir.path().join("home");
@@ -82,7 +82,7 @@ fn run_mode_normalizes_legacy_model_flags_for_claude_code() {
     .expect("auth file");
 
     let script = format!(
-        "#!/bin/sh\nprintf 'MODEL=%s\\nOPUS=%s\\nSONNET=%s\\nHAIKU=%s\\nSUBAGENT=%s\\nARGS=%s\\n' \"$ANTHROPIC_MODEL\" \"$ANTHROPIC_DEFAULT_OPUS_MODEL\" \"$ANTHROPIC_DEFAULT_SONNET_MODEL\" \"$ANTHROPIC_DEFAULT_HAIKU_MODEL\" \"$CLAUDE_CODE_SUBAGENT_MODEL\" \"$*\" > \"{}\"\n",
+        "#!/bin/sh\nprintf 'OPUS=%s\\nSONNET=%s\\nHAIKU=%s\\nSUBAGENT=%s\\nARGS=%s\\n' \"$ANTHROPIC_DEFAULT_OPUS_MODEL\" \"$ANTHROPIC_DEFAULT_SONNET_MODEL\" \"$ANTHROPIC_DEFAULT_HAIKU_MODEL\" \"$CLAUDE_CODE_SUBAGENT_MODEL\" \"$*\" > \"{}\"\n",
         capture_path.display()
     );
     let claude_path = bin_dir.join("claude");
@@ -103,23 +103,22 @@ fn run_mode_normalizes_legacy_model_flags_for_claude_code() {
             format!("{}:{}", bin_dir.display(), std::env::var("PATH").unwrap()),
         )
         .arg("--model")
-        .arg("claude-3-5-sonnet-latest")
+        .arg("gpt-4o-mini")
         .arg("--print")
         .arg("hello")
         .assert()
         .success();
 
     let captured = fs::read_to_string(capture_path).expect("capture");
-    assert!(captured.contains("MODEL=sonnet"));
-    assert!(captured.contains("OPUS=claude-opus-4-1-20250805"));
-    assert!(captured.contains("SONNET=claude-sonnet-4-20250514"));
-    assert!(captured.contains("HAIKU=claude-3-5-haiku-20241022"));
-    assert!(captured.contains("SUBAGENT=claude-sonnet-4-20250514"));
-    assert!(captured.contains("ARGS=--print hello"));
+    assert!(captured.contains("OPUS=gpt-4o-mini"));
+    assert!(captured.contains("SONNET=gpt-4o-mini"));
+    assert!(captured.contains("HAIKU=gpt-4o-mini"));
+    assert!(captured.contains("SUBAGENT=gpt-4o-mini"));
+    assert!(captured.contains("ARGS=--model gpt-4o-mini --print hello"));
 }
 
 #[test]
-fn run_mode_defaults_to_supported_claude_code_model_configuration() {
+fn run_mode_defaults_all_model_tiers_to_default_backend_model() {
     let dir = tempdir().expect("temp dir");
     let bin_dir = dir.path().join("bin");
     let home_dir = dir.path().join("home");
@@ -140,7 +139,7 @@ fn run_mode_defaults_to_supported_claude_code_model_configuration() {
     .expect("auth file");
 
     let script = format!(
-        "#!/bin/sh\nprintf 'MODEL=%s\\nOPUS=%s\\nSONNET=%s\\nHAIKU=%s\\nSUBAGENT=%s\\n' \"$ANTHROPIC_MODEL\" \"$ANTHROPIC_DEFAULT_OPUS_MODEL\" \"$ANTHROPIC_DEFAULT_SONNET_MODEL\" \"$ANTHROPIC_DEFAULT_HAIKU_MODEL\" \"$CLAUDE_CODE_SUBAGENT_MODEL\" > \"{}\"\n",
+        "#!/bin/sh\nprintf 'OPUS=%s\\nSONNET=%s\\nHAIKU=%s\\nSUBAGENT=%s\\nARGS=%s\\n' \"$ANTHROPIC_DEFAULT_OPUS_MODEL\" \"$ANTHROPIC_DEFAULT_SONNET_MODEL\" \"$ANTHROPIC_DEFAULT_HAIKU_MODEL\" \"$CLAUDE_CODE_SUBAGENT_MODEL\" \"$*\" > \"{}\"\n",
         capture_path.display()
     );
     let claude_path = bin_dir.join("claude");
@@ -164,11 +163,11 @@ fn run_mode_defaults_to_supported_claude_code_model_configuration() {
         .success();
 
     let captured = fs::read_to_string(capture_path).expect("capture");
-    assert!(captured.contains("MODEL=sonnet"));
-    assert!(captured.contains("OPUS=claude-opus-4-1-20250805"));
-    assert!(captured.contains("SONNET=claude-sonnet-4-20250514"));
-    assert!(captured.contains("HAIKU=claude-3-5-haiku-20241022"));
-    assert!(captured.contains("SUBAGENT=claude-sonnet-4-20250514"));
+    assert!(captured.contains("OPUS=gpt-4o"));
+    assert!(captured.contains("SONNET=gpt-4o"));
+    assert!(captured.contains("HAIKU=gpt-4o"));
+    assert!(captured.contains("SUBAGENT=gpt-4o"));
+    assert!(captured.contains("ARGS=--model gpt-4o"));
 }
 
 #[cfg(unix)]

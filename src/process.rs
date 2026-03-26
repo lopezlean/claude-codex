@@ -9,10 +9,7 @@ use tokio::process::{Child, Command};
 
 use crate::error::AppError;
 
-const DEFAULT_ACTIVE_MODEL: &str = "sonnet";
-const DEFAULT_OPUS_MODEL: &str = "claude-opus-4-1-20250805";
-const DEFAULT_SONNET_MODEL: &str = "claude-sonnet-4-20250514";
-const DEFAULT_HAIKU_MODEL: &str = "claude-3-5-haiku-20241022";
+const DEFAULT_BACKEND_MODEL: &str = "gpt-4o";
 
 pub fn reserve_local_port() -> Result<u16> {
     let listener = TcpListener::bind(("127.0.0.1", 0))?;
@@ -24,22 +21,20 @@ pub fn reserve_local_port() -> Result<u16> {
 pub fn spawn_claude(binary: &str, port: u16, args: &[OsString]) -> Result<Child, AppError> {
     let base_url = format!("http://127.0.0.1:{port}/v1");
     let claude_path = resolve_claude_binary(binary)?;
-    let (forwarded_args, requested_model) = extract_selected_model(args);
-    let active_model =
-        normalize_selected_model(requested_model.as_deref().unwrap_or(DEFAULT_ACTIVE_MODEL));
-    let subagent_model = resolve_subagent_model(&active_model);
+    let (extra_args, selected_model) = extract_selected_model(args);
+    let backend_model = selected_model.unwrap_or_else(|| DEFAULT_BACKEND_MODEL.to_string());
+    let child_args = build_claude_args(&backend_model, &extra_args);
 
     Command::new(claude_path)
-        .args(&forwarded_args)
+        .args(&child_args)
         .env("ANTHROPIC_BASE_URL", base_url)
         .env("ANTHROPIC_API_KEY", "")
         .env("ANTHROPIC_AUTH_TOKEN", "claude-codex-proxy")
         .env("CLAUDE_CODE_ATTRIBUTION_HEADER", "0")
-        .env("ANTHROPIC_MODEL", &active_model)
-        .env("ANTHROPIC_DEFAULT_OPUS_MODEL", DEFAULT_OPUS_MODEL)
-        .env("ANTHROPIC_DEFAULT_SONNET_MODEL", DEFAULT_SONNET_MODEL)
-        .env("ANTHROPIC_DEFAULT_HAIKU_MODEL", DEFAULT_HAIKU_MODEL)
-        .env("CLAUDE_CODE_SUBAGENT_MODEL", subagent_model)
+        .env("ANTHROPIC_DEFAULT_OPUS_MODEL", &backend_model)
+        .env("ANTHROPIC_DEFAULT_SONNET_MODEL", &backend_model)
+        .env("ANTHROPIC_DEFAULT_HAIKU_MODEL", &backend_model)
+        .env("CLAUDE_CODE_SUBAGENT_MODEL", &backend_model)
         .stdin(Stdio::inherit())
         .stdout(Stdio::inherit())
         .stderr(Stdio::inherit())
@@ -83,35 +78,14 @@ fn extract_selected_model(args: &[OsString]) -> (Vec<OsString>, Option<String>) 
     (forwarded_args, selected_model)
 }
 
-fn normalize_selected_model(model: &str) -> String {
-    let normalized = model.trim().to_ascii_lowercase();
-
-    if normalized.is_empty() || normalized == "default" {
-        return DEFAULT_ACTIVE_MODEL.to_string();
+fn build_claude_args(model: &str, extra_args: &[OsString]) -> Vec<OsString> {
+    let mut args = Vec::with_capacity(extra_args.len() + 2);
+    if !model.is_empty() {
+        args.push("--model".into());
+        args.push(model.into());
     }
-
-    if normalized.contains("haiku") {
-        return "haiku".to_string();
-    }
-
-    if normalized.contains("opus") {
-        return "opus".to_string();
-    }
-
-    if normalized.contains("sonnet") {
-        return "sonnet".to_string();
-    }
-
-    model.to_string()
-}
-
-fn resolve_subagent_model(active_model: &str) -> String {
-    match active_model {
-        "haiku" => DEFAULT_HAIKU_MODEL.to_string(),
-        "opus" => DEFAULT_OPUS_MODEL.to_string(),
-        "sonnet" => DEFAULT_SONNET_MODEL.to_string(),
-        other => other.to_string(),
-    }
+    args.extend(extra_args.iter().cloned());
+    args
 }
 
 fn resolve_claude_binary(binary: &str) -> Result<OsString, AppError> {
