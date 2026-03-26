@@ -1,8 +1,13 @@
 mod auth;
+mod backend;
 mod cli;
 mod config;
 mod error;
+mod handlers;
 mod protocol;
+mod server;
+#[cfg(test)]
+mod test_support;
 
 use crate::auth::openai::{OpenAiAuthConfig, OpenAiAuthProvider};
 use crate::auth::provider::AuthProvider;

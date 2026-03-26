@@ -381,7 +381,6 @@ mod tests {
     use std::io::{Read, Write};
     use std::net::{TcpListener, TcpStream};
     use std::sync::Arc;
-    use std::sync::Mutex;
 
     use anyhow::{anyhow, Result};
     use tempfile::tempdir;
@@ -392,14 +391,13 @@ mod tests {
     use crate::auth::provider::AuthProvider;
     use crate::auth::session::{CodexAuthFile, CodexTokens};
     use crate::auth::session_store::FileSessionStore;
+    use crate::test_support::lock_network_test;
 
     use super::{OpenAiAuthConfig, OpenAiAuthProvider};
 
-    static NETWORK_TEST_LOCK: Mutex<()> = Mutex::new(());
-
     #[tokio::test]
     async fn refreshes_an_expiring_session_and_persists_new_tokens() {
-        let _guard = NETWORK_TEST_LOCK.lock().expect("lock network test mutex");
+        let _guard = lock_network_test();
         let server = MockServer::start().await;
         let dir = tempdir().expect("temp dir");
         let auth_path = dir.path().join("auth.json");
@@ -470,7 +468,7 @@ mod tests {
 
     #[tokio::test]
     async fn login_accepts_an_immediate_callback_after_opening_the_browser() {
-        let _guard = NETWORK_TEST_LOCK.lock().expect("lock network test mutex");
+        let _guard = lock_network_test();
         let server = MockServer::start().await;
         Mock::given(method("POST"))
             .and(path("/oauth/token"))
@@ -533,7 +531,7 @@ mod tests {
 
     #[tokio::test]
     async fn login_releases_the_callback_port_when_opening_the_browser_fails() {
-        let _guard = NETWORK_TEST_LOCK.lock().expect("lock network test mutex");
+        let _guard = lock_network_test();
         let dir = tempdir().expect("temp dir");
         let auth_path = dir.path().join("auth.json");
         let store = FileSessionStore::new(auth_path);
