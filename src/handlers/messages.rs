@@ -30,8 +30,7 @@ pub async fn create_message(
             .map_err(internal_error)?
             .map(move |chunk| {
                 let bytes = chunk?;
-                let raw = String::from_utf8_lossy(&bytes);
-                let translated = translator.push_chunk(&raw)?;
+                let translated = translator.push_bytes(&bytes)?;
                 Ok::<Bytes, anyhow::Error>(Bytes::from(translated))
             });
 

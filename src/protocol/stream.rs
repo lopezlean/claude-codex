@@ -7,40 +7,48 @@ use crate::protocol::mapper::map_stop_reason;
 
 #[derive(Debug, Default)]
 pub struct OpenAiSseTranslator {
-    buffer: String,
+    buffer: Vec<u8>,
     started_message: bool,
-    active_block: Option<ActiveBlock>,
+    next_content_index: usize,
+    text_block: Option<TextBlockState>,
     tool_blocks: BTreeMap<usize, ToolBlockState>,
-    has_text_block: bool,
     emitted_message_stop: bool,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ActiveBlock {
-    Text,
-    Tool { upstream_index: usize },
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct TextBlockState {
+    anthropic_index: usize,
+    open: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct ToolBlockState {
     anthropic_index: usize,
-    id: String,
-    name: String,
+    id: Option<String>,
+    name: Option<String>,
     started: bool,
+    open: bool,
+    pending_arguments: String,
 }
 
 impl OpenAiSseTranslator {
-    pub fn push_chunk(&mut self, chunk: &str) -> Result<String> {
-        self.buffer.push_str(chunk);
+    pub fn push_bytes(&mut self, chunk: &[u8]) -> Result<String> {
+        self.buffer.extend_from_slice(chunk);
         let mut output = String::new();
 
-        while let Some(boundary) = self.buffer.find("\n\n") {
-            let frame = self.buffer[..boundary].to_string();
-            self.buffer.drain(..boundary + 2);
+        while let Some((frame_end, delimiter_len)) = find_frame_boundary(&self.buffer) {
+            let frame_bytes = self.buffer[..frame_end].to_vec();
+            self.buffer.drain(..frame_end + delimiter_len);
+            let frame = String::from_utf8(frame_bytes)?;
             output.push_str(&self.translate_frame(frame.trim())?);
         }
 
         Ok(output)
+    }
+
+    #[cfg(test)]
+    pub fn push_chunk(&mut self, chunk: &str) -> Result<String> {
+        self.push_bytes(chunk.as_bytes())
     }
 
     fn translate_frame(&mut self, frame: &str) -> Result<String> {
@@ -72,12 +80,12 @@ impl OpenAiSseTranslator {
 
         if let Some(text) = delta.get("content").and_then(Value::as_str) {
             if !text.is_empty() {
-                self.ensure_text_block_started(&mut output);
+                let index = self.ensure_text_block_started(&mut output);
                 output.push_str(&format_sse_event(
                     "content_block_delta",
                     json!({
                         "type": "content_block_delta",
-                        "index": 0,
+                        "index": index,
                         "delta": {
                             "type": "text_delta",
                             "text": text,
@@ -94,7 +102,8 @@ impl OpenAiSseTranslator {
         }
 
         if let Some(finish_reason) = choice.get("finish_reason").and_then(Value::as_str) {
-            self.close_active_block(&mut output);
+            self.close_text_block(&mut output);
+            self.close_open_tool_blocks(&mut output);
             output.push_str(&format_sse_event(
                 "message_delta",
                 json!({
@@ -102,7 +111,7 @@ impl OpenAiSseTranslator {
                     "delta": {
                         "stop_reason": map_stop_reason(
                             Some(finish_reason),
-                            !self.tool_blocks.is_empty(),
+                            self.tool_blocks.values().any(|block| block.started),
                         )
                     }
                 }),
@@ -118,7 +127,8 @@ impl OpenAiSseTranslator {
         }
 
         let mut output = String::new();
-        self.close_active_block(&mut output);
+        self.close_text_block(&mut output);
+        self.close_open_tool_blocks(&mut output);
         output.push_str(&format_sse_event(
             "message_stop",
             json!({ "type": "message_stop" }),
@@ -132,52 +142,74 @@ impl OpenAiSseTranslator {
         let new_id = tool_call
             .get("id")
             .and_then(Value::as_str)
-            .filter(|id| !id.is_empty());
+            .filter(|id| !id.is_empty())
+            .map(str::to_string);
         let new_name = tool_call
             .pointer("/function/name")
             .and_then(Value::as_str)
-            .filter(|name| !name.is_empty());
-        let arguments = tool_call
+            .filter(|name| !name.is_empty())
+            .map(str::to_string);
+        let new_arguments = tool_call
             .pointer("/function/arguments")
             .and_then(Value::as_str)
             .filter(|arguments| !arguments.is_empty())
             .map(str::to_string);
 
-        let (anthropic_index, id, name, should_start) = {
+        let (anthropic_index, id, name, should_start, pending_delta) = {
+            let next_index = self.next_content_index;
             let block = self
                 .tool_blocks
                 .entry(upstream_index)
                 .or_insert_with(|| ToolBlockState {
-                    anthropic_index: upstream_index + usize::from(self.has_text_block),
-                    id: String::new(),
-                    name: String::new(),
+                    anthropic_index: next_index,
+                    id: None,
+                    name: None,
                     started: false,
+                    open: false,
+                    pending_arguments: String::new(),
                 });
 
-            if let Some(id) = new_id {
-                block.id = id.to_string();
-            }
-            if let Some(name) = new_name {
-                block.name = name.to_string();
+            if block.anthropic_index == next_index {
+                self.next_content_index += 1;
             }
 
-            let should_start = !block.started;
+            if let Some(id) = new_id {
+                block.id = Some(id);
+            }
+            if let Some(name) = new_name {
+                block.name = Some(name);
+            }
+
+            let mut pending_delta = None;
+            if block.started {
+                if let Some(arguments) = new_arguments {
+                    pending_delta = Some(arguments);
+                }
+            } else if let Some(arguments) = new_arguments {
+                block.pending_arguments.push_str(&arguments);
+            }
+
+            let should_start = !block.started && block.id.is_some() && block.name.is_some();
             if should_start {
                 block.started = true;
+                block.open = true;
+                if !block.pending_arguments.is_empty() {
+                    pending_delta = Some(std::mem::take(&mut block.pending_arguments));
+                }
             }
 
             (
                 block.anthropic_index,
-                block.id.clone(),
-                block.name.clone(),
+                block.id.clone().unwrap_or_default(),
+                block.name.clone().unwrap_or_default(),
                 should_start,
+                pending_delta,
             )
         };
 
         let mut output = String::new();
         if should_start {
-            self.close_active_block(&mut output);
-            self.active_block = Some(ActiveBlock::Tool { upstream_index });
+            self.close_text_block(&mut output);
             output.push_str(&format_sse_event(
                 "content_block_start",
                 json!({
@@ -191,12 +223,9 @@ impl OpenAiSseTranslator {
                     }
                 }),
             ));
-        } else if self.active_block != Some(ActiveBlock::Tool { upstream_index }) {
-            self.close_active_block(&mut output);
-            self.active_block = Some(ActiveBlock::Tool { upstream_index });
         }
 
-        if let Some(arguments) = arguments {
+        if let Some(arguments) = pending_delta {
             output.push_str(&format_sse_event(
                 "content_block_delta",
                 json!({
@@ -232,48 +261,72 @@ impl OpenAiSseTranslator {
         self.started_message = true;
     }
 
-    fn ensure_text_block_started(&mut self, output: &mut String) {
-        if self.active_block == Some(ActiveBlock::Text) {
-            return;
+    fn ensure_text_block_started(&mut self, output: &mut String) -> usize {
+        if let Some(block) = &self.text_block {
+            if block.open {
+                return block.anthropic_index;
+            }
         }
 
-        self.close_active_block(output);
-        self.active_block = Some(ActiveBlock::Text);
-        self.has_text_block = true;
+        let anthropic_index = self.next_content_index;
+        self.next_content_index += 1;
+        self.text_block = Some(TextBlockState {
+            anthropic_index,
+            open: true,
+        });
         output.push_str(&format_sse_event(
             "content_block_start",
             json!({
                 "type": "content_block_start",
-                "index": 0,
+                "index": anthropic_index,
                 "content_block": {
                     "type": "text",
                     "text": "",
                 }
             }),
         ));
+        anthropic_index
     }
 
-    fn close_active_block(&mut self, output: &mut String) {
-        let Some(active_block) = self.active_block.take() else {
+    fn close_text_block(&mut self, output: &mut String) {
+        let Some(block) = &mut self.text_block else {
             return;
         };
-
-        let index = match active_block {
-            ActiveBlock::Text => 0,
-            ActiveBlock::Tool { upstream_index } => self
-                .tool_blocks
-                .get(&upstream_index)
-                .map(|block| block.anthropic_index)
-                .unwrap_or(upstream_index + usize::from(self.has_text_block)),
-        };
+        if !block.open {
+            return;
+        }
 
         output.push_str(&format_sse_event(
             "content_block_stop",
             json!({
                 "type": "content_block_stop",
-                "index": index,
+                "index": block.anthropic_index,
             }),
         ));
+        block.open = false;
+    }
+
+    fn close_open_tool_blocks(&mut self, output: &mut String) {
+        let mut open_blocks = self
+            .tool_blocks
+            .iter()
+            .filter(|(_, block)| block.open)
+            .map(|(upstream_index, block)| (*upstream_index, block.anthropic_index))
+            .collect::<Vec<_>>();
+        open_blocks.sort_by_key(|(_, anthropic_index)| *anthropic_index);
+
+        for (upstream_index, anthropic_index) in open_blocks {
+            if let Some(block) = self.tool_blocks.get_mut(&upstream_index) {
+                block.open = false;
+            }
+            output.push_str(&format_sse_event(
+                "content_block_stop",
+                json!({
+                    "type": "content_block_stop",
+                    "index": anthropic_index,
+                }),
+            ));
+        }
     }
 }
 
@@ -283,9 +336,22 @@ pub fn translate_openai_sse_frame(frame: &str) -> Result<String> {
     translator.push_chunk(&format!("{frame}\n\n"))
 }
 
+fn find_frame_boundary(buffer: &[u8]) -> Option<(usize, usize)> {
+    for index in 0..buffer.len().saturating_sub(1) {
+        if buffer[index..].starts_with(b"\r\n\r\n") {
+            return Some((index, 4));
+        }
+        if buffer[index..].starts_with(b"\n\n") {
+            return Some((index, 2));
+        }
+    }
+    None
+}
+
 fn extract_sse_payload(frame: &str) -> String {
     frame
         .lines()
+        .map(|line| line.trim_end_matches('\r'))
         .filter_map(|line| {
             line.strip_prefix("data: ")
                 .or_else(|| line.strip_prefix("data:"))
@@ -341,6 +407,53 @@ mod tests {
     }
 
     #[test]
+    fn buffers_utf8_multibyte_characters_across_byte_chunks() {
+        let mut translator = OpenAiSseTranslator::default();
+        let chunk = "data: {\"choices\":[{\"delta\":{\"content\":\"Málaga\"}}]}\n\n"
+            .as_bytes()
+            .to_vec();
+        let accent = "á".as_bytes();
+        let split_index = chunk
+            .windows(accent.len())
+            .position(|window| window == accent)
+            .expect("accent should exist")
+            + 1;
+
+        let first = translator
+            .push_bytes(&chunk[..split_index])
+            .expect("first bytes");
+        assert!(first.is_empty());
+
+        let second = translator
+            .push_bytes(&chunk[split_index..])
+            .expect("second bytes");
+        assert!(second.contains("\"text\":\"Málaga\""));
+        assert!(!second.contains("\u{fffd}"));
+    }
+
+    #[test]
+    fn waits_for_tool_metadata_before_starting_tool_use_block() {
+        let mut translator = OpenAiSseTranslator::default();
+        let first = translator
+            .push_chunk(
+                "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"arguments\":\"{\\\"city\\\":\\\"Mad\"}}]}}]}\n\n",
+            )
+            .expect("first chunk");
+        assert!(first.contains("event: message_start"));
+        assert!(!first.contains("event: content_block_start"));
+
+        let second = translator
+            .push_chunk(
+                "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_lookup_weather\",\"type\":\"function\",\"function\":{\"name\":\"lookup_weather\"}}]}}]}\n\n",
+            )
+            .expect("second chunk");
+        assert!(second.contains("event: content_block_start"));
+        assert!(second.contains("\"id\":\"call_lookup_weather\""));
+        assert!(second.contains("\"name\":\"lookup_weather\""));
+        assert!(second.contains("\"partial_json\":\"{\\\"city\\\":\\\"Mad\""));
+    }
+
+    #[test]
     fn streams_tool_calls_as_tool_use_blocks() {
         let mut translator = OpenAiSseTranslator::default();
         let start = translator
@@ -390,6 +503,34 @@ mod tests {
         assert!(tool.contains("\"index\":0"));
         assert!(tool.contains("\"index\":1"));
         assert!(tool.contains("\"type\":\"tool_use\""));
+    }
+
+    #[test]
+    fn supports_interleaved_tool_call_deltas_without_stopping_earlier_blocks() {
+        let mut translator = OpenAiSseTranslator::default();
+        let tool0 = translator
+            .push_chunk(
+                "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_lookup_weather\",\"type\":\"function\",\"function\":{\"name\":\"lookup_weather\",\"arguments\":\"{\\\"city\\\":\\\"Mad\"}}]}}]}\n\n",
+            )
+            .expect("tool0 start");
+        assert!(tool0.contains("\"index\":0"));
+
+        let tool1 = translator
+            .push_chunk(
+                "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":1,\"id\":\"call_lookup_country\",\"type\":\"function\",\"function\":{\"name\":\"lookup_country\",\"arguments\":\"{\\\"code\\\":\\\"ES\\\"}\"}}]}}]}\n\n",
+            )
+            .expect("tool1 start");
+        assert!(!tool1.contains("event: content_block_stop"));
+        assert!(tool1.contains("\"index\":1"));
+
+        let tool0_more = translator
+            .push_chunk(
+                "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"arguments\":\"rid\\\"}\"}}]}}]}\n\n",
+            )
+            .expect("tool0 more");
+        assert!(!tool0_more.contains("event: content_block_stop"));
+        assert!(tool0_more.contains("\"index\":0"));
+        assert!(tool0_more.contains("\"partial_json\":\"rid\\\"}\""));
     }
 }
 
