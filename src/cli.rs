@@ -32,28 +32,50 @@ where
 }
 
 fn parse_auth(args: &[OsString]) -> Result<ParsedCli, AppError> {
-    match args.get(2).and_then(|value| value.to_str()) {
-        Some("login") => Ok(ParsedCli::Auth {
+    let subcommand = args
+        .get(2)
+        .and_then(|value| value.to_str())
+        .ok_or_else(|| AppError::Message("missing auth subcommand".to_string()))?;
+
+    if args.len() != 3 {
+        return Err(AppError::Message(format!(
+            "auth {subcommand} does not accept trailing arguments"
+        )));
+    }
+
+    match subcommand {
+        "login" => Ok(ParsedCli::Auth {
             command: AuthCommand::Login,
         }),
-        Some("status") => Ok(ParsedCli::Auth {
+        "status" => Ok(ParsedCli::Auth {
             command: AuthCommand::Status,
         }),
-        Some("logout") => Ok(ParsedCli::Auth {
+        "logout" => Ok(ParsedCli::Auth {
             command: AuthCommand::Logout,
         }),
-        _ => Ok(ParsedCli::Run {
-            claude_args: args.iter().skip(1).cloned().collect(),
-        }),
+        _ => Err(AppError::Message(format!(
+            "unknown auth subcommand: {subcommand}"
+        ))),
     }
 }
 
 fn parse_proxy(args: &[OsString]) -> Result<ParsedCli, AppError> {
-    match args.get(2).and_then(|value| value.to_str()) {
-        Some("serve") => Ok(ParsedCli::ProxyServe),
-        _ => Ok(ParsedCli::Run {
-            claude_args: args.iter().skip(1).cloned().collect(),
-        }),
+    let subcommand = args
+        .get(2)
+        .and_then(|value| value.to_str())
+        .ok_or_else(|| AppError::Message("missing proxy subcommand".to_string()))?;
+
+    if args.len() != 3 {
+        return Err(AppError::Message(format!(
+            "proxy {subcommand} does not accept trailing arguments"
+        )));
+    }
+
+    match subcommand {
+        "serve" => Ok(ParsedCli::ProxyServe),
+        _ => Err(AppError::Message(format!(
+            "unknown proxy subcommand: {subcommand}"
+        ))),
     }
 }
 
@@ -89,5 +111,33 @@ mod tests {
     fn parses_proxy_serve_command() {
         let parsed = parse(["claude-codex", "proxy", "serve"]).expect("proxy serve should parse");
         assert_eq!(parsed, ParsedCli::ProxyServe);
+    }
+
+    #[test]
+    fn rejects_bad_auth_commands() {
+        for args in [
+            vec!["claude-codex", "auth"],
+            vec!["claude-codex", "auth", "bogus"],
+            vec!["claude-codex", "auth", "login", "extra"],
+        ] {
+            assert!(
+                parse(args.clone()).is_err(),
+                "unexpectedly parsed auth args: {args:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_bad_proxy_commands() {
+        for args in [
+            vec!["claude-codex", "proxy"],
+            vec!["claude-codex", "proxy", "bogus"],
+            vec!["claude-codex", "proxy", "serve", "extra"],
+        ] {
+            assert!(
+                parse(args.clone()).is_err(),
+                "unexpectedly parsed proxy args: {args:?}"
+            );
+        }
     }
 }
