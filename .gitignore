@@ -1,1 +1,5 @@
 /target/
+/pages/.astro/
+/pages/dist/
+/pages/node_modules/
+/pages/dist/
