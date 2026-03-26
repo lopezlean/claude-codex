@@ -13,8 +13,7 @@ pub async fn count_tokens(
 ) -> Json<CountTokensResponse> {
     let mut input_tokens = request
         .system
-        .as_deref()
-        .map(|system| system.split_whitespace().count())
+        .map(|system| system.into_text().split_whitespace().count())
         .unwrap_or(0);
     for message in request.messages {
         for block in message.content {

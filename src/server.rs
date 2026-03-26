@@ -192,6 +192,55 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn accepts_system_as_text_blocks_in_messages_requests() {
+        let _guard = lock_network_test();
+        let upstream = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/chat/completions"))
+            .and(body_string_contains("\"role\":\"system\""))
+            .and(body_string_contains("You are concise."))
+            .and(body_string_contains("Prefer bullets."))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_raw(
+                    r#"{
+                      "id":"chatcmpl_124",
+                      "choices":[{"message":{"role":"assistant","content":"Structured reply","tool_calls":[]}}],
+                      "usage":{"prompt_tokens":12,"completion_tokens":3}
+                    }"#,
+                    "application/json",
+                ),
+            )
+            .mount(&upstream)
+            .await;
+
+        let router = build_router_for_test(&upstream.uri()).await;
+        let response = router
+            .oneshot(
+                axum::http::Request::post("/v1/messages")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        r#"{
+                          "model":"claude-3-5-sonnet-latest",
+                          "system":[
+                            {"type":"text","text":"You are concise."},
+                            {"type":"text","text":"Prefer bullets."}
+                          ],
+                          "messages":[{"role":"user","content":[{"type":"text","text":"Hello"}]}],
+                          "stream":false
+                        }"#,
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .expect("response");
+
+        assert_eq!(response.status(), axum::http::StatusCode::OK);
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        let raw = String::from_utf8(body.to_vec()).unwrap();
+        assert!(raw.contains("Structured reply"), "unexpected body: {raw}");
+    }
+
+    #[tokio::test]
     async fn forwards_openai_tool_calls_as_anthropic_tool_use_blocks() {
         let _guard = lock_network_test();
         let upstream = MockServer::start().await;
@@ -421,6 +470,35 @@ mod tests {
         let body = response.into_body().collect().await.unwrap().to_bytes();
         let raw = String::from_utf8(body.to_vec()).unwrap();
         assert!(raw.contains("\"input_tokens\":5"), "unexpected body: {raw}");
+    }
+
+    #[tokio::test]
+    async fn count_tokens_accepts_system_as_text_blocks() {
+        let _guard = lock_network_test();
+        let router = build_router_for_test("http://127.0.0.1:9").await;
+        let response = router
+            .oneshot(
+                axum::http::Request::post("/v1/messages/count_tokens")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        r#"{
+                          "model":"claude-3-5-sonnet-latest",
+                          "system":[
+                            {"type":"text","text":"You are concise."},
+                            {"type":"text","text":"Prefer bullets."}
+                          ],
+                          "messages":[{"role":"user","content":[{"type":"text","text":"Hello world"}]}]
+                        }"#,
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .expect("response");
+
+        assert_eq!(response.status(), axum::http::StatusCode::OK);
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        let raw = String::from_utf8(body.to_vec()).unwrap();
+        assert!(raw.contains("\"input_tokens\":7"), "unexpected body: {raw}");
     }
 
     #[tokio::test]

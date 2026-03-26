@@ -5,7 +5,7 @@ use serde_json::Value;
 pub struct AnthropicMessagesRequest {
     pub model: String,
     #[serde(default)]
-    pub system: Option<String>,
+    pub system: Option<AnthropicSystemPrompt>,
     #[serde(default)]
     pub max_tokens: Option<u32>,
     #[serde(default)]
@@ -15,6 +15,39 @@ pub struct AnthropicMessagesRequest {
     #[serde(default)]
     pub tool_choice: Option<ToolChoice>,
     pub messages: Vec<AnthropicMessage>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(untagged)]
+pub enum AnthropicSystemPrompt {
+    Text(String),
+    Blocks(Vec<AnthropicSystemBlock>),
+}
+
+impl AnthropicSystemPrompt {
+    pub fn into_text(self) -> String {
+        match self {
+            Self::Text(text) => text,
+            Self::Blocks(blocks) => blocks
+                .into_iter()
+                .map(|block| match block {
+                    AnthropicSystemBlock::Text { text } => text,
+                })
+                .collect::<Vec<_>>()
+                .join("\n\n"),
+        }
+    }
+
+    pub fn text(&self) -> String {
+        self.clone().into_text()
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "type")]
+pub enum AnthropicSystemBlock {
+    #[serde(rename = "text")]
+    Text { text: String },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

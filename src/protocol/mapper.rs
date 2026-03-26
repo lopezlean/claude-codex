@@ -34,7 +34,7 @@ pub fn map_anthropic_to_openai(request: &AnthropicMessagesRequest) -> Result<Ope
     if let Some(system) = &request.system {
         messages.push(OpenAiChatMessage {
             role: "system".to_string(),
-            content: Some(system.clone()),
+            content: Some(system.text()),
             tool_call_id: None,
             tool_calls: vec![],
         });
@@ -260,7 +260,8 @@ mod tests {
 
     use super::{map_anthropic_to_openai, map_model_name, map_openai_to_anthropic_response};
     use crate::protocol::anthropic::{
-        AnthropicContentBlock, AnthropicMessage, AnthropicMessagesRequest, ToolChoice,
+        AnthropicContentBlock, AnthropicMessage, AnthropicMessagesRequest, AnthropicSystemPrompt,
+        ToolChoice,
     };
     use crate::protocol::openai::OpenAiToolChoice;
 
@@ -268,7 +269,7 @@ mod tests {
     fn maps_system_and_user_text_to_chat_completions_messages() {
         let request = AnthropicMessagesRequest {
             model: "claude-3-5-sonnet-latest".to_string(),
-            system: Some("You are concise.".to_string()),
+            system: Some(AnthropicSystemPrompt::Text("You are concise.".to_string())),
             max_tokens: Some(512),
             stream: false,
             tools: vec![],
