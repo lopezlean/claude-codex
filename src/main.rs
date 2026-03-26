@@ -2,6 +2,7 @@ mod auth;
 mod cli;
 mod config;
 mod error;
+mod protocol;
 
 use crate::auth::openai::{OpenAiAuthConfig, OpenAiAuthProvider};
 use crate::auth::provider::AuthProvider;
