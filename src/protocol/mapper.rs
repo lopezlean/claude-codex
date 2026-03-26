@@ -101,8 +101,13 @@ pub fn map_anthropic_to_openai(request: &AnthropicMessagesRequest) -> Result<Ope
 }
 
 pub fn map_openai_to_anthropic_response(model: &str, response: &Value) -> Result<Value> {
-    let message = response
-        .pointer("/choices/0/message")
+    let choice = response
+        .pointer("/choices/0")
+        .and_then(Value::as_object)
+        .cloned()
+        .unwrap_or_default();
+    let message = choice
+        .get("message")
         .and_then(Value::as_object)
         .cloned()
         .unwrap_or_default();
@@ -124,12 +129,7 @@ pub fn map_openai_to_anthropic_response(model: &str, response: &Value) -> Result
         .unwrap_or_default();
 
     for tool_call in &tool_calls {
-        let input = tool_call
-            .pointer("/function/arguments")
-            .and_then(Value::as_str)
-            .map(serde_json::from_str)
-            .transpose()?
-            .unwrap_or(Value::Object(Default::default()));
+        let input = map_tool_call_input(tool_call);
         content.push(json!({
             "type": "tool_use",
             "id": tool_call.get("id").and_then(Value::as_str).unwrap_or_default(),
@@ -144,8 +144,80 @@ pub fn map_openai_to_anthropic_response(model: &str, response: &Value) -> Result
         "role": "assistant",
         "model": model,
         "content": content,
-        "stop_reason": if tool_calls.is_empty() { "end_turn" } else { "tool_use" }
+        "stop_reason": map_stop_reason(choice.get("finish_reason").and_then(Value::as_str), !tool_calls.is_empty())
     }))
+}
+
+fn map_stop_reason(finish_reason: Option<&str>, has_tool_calls: bool) -> &'static str {
+    match finish_reason {
+        Some("length") => "max_tokens",
+        Some("tool_calls") | Some("function_call") => "tool_use",
+        Some("content_filter") => "refusal",
+        Some("stop") => {
+            if has_tool_calls {
+                "tool_use"
+            } else {
+                "end_turn"
+            }
+        }
+        Some(_) | None => {
+            if has_tool_calls {
+                "tool_use"
+            } else {
+                "end_turn"
+            }
+        }
+    }
+}
+
+fn map_tool_call_input(tool_call: &Value) -> Value {
+    match tool_call.pointer("/function/arguments") {
+        Some(Value::Object(map)) => Value::Object(map.clone()),
+        Some(Value::String(raw)) => map_tool_call_input_string(
+            tool_call
+                .get("id")
+                .and_then(Value::as_str)
+                .unwrap_or_default(),
+            raw,
+        ),
+        Some(other) => {
+            let tool_call_id = tool_call
+                .get("id")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            tracing::warn!(
+                tool_call_id,
+                "tool arguments were not a string or object; wrapping value"
+            );
+            json!({ "__value": other.clone() })
+        }
+        None => Value::Object(Default::default()),
+    }
+}
+
+fn map_tool_call_input_string(tool_call_id: &str, raw: &str) -> Value {
+    if raw.trim().is_empty() {
+        return Value::Object(Default::default());
+    }
+
+    match serde_json::from_str::<Value>(raw) {
+        Ok(Value::Object(map)) => Value::Object(map),
+        Ok(other) => {
+            tracing::warn!(
+                tool_call_id,
+                "tool arguments were valid JSON but not an object; wrapping value"
+            );
+            json!({ "__value": other })
+        }
+        Err(error) => {
+            tracing::warn!(
+                tool_call_id,
+                %error,
+                "tool arguments were malformed JSON; preserving raw payload"
+            );
+            json!({ "__raw_arguments": raw })
+        }
+    }
 }
 
 fn map_tool_choice(choice: &ToolChoice) -> OpenAiToolChoice {
@@ -362,5 +434,89 @@ mod tests {
         assert_eq!(mapped["content"][1]["id"], "call_lookup_weather");
         assert_eq!(mapped["content"][1]["name"], "lookup_weather");
         assert_eq!(mapped["content"][1]["input"]["city"], "Madrid");
+    }
+
+    #[test]
+    fn maps_openai_length_finish_reason_to_anthropic_max_tokens() {
+        let response = json!({
+            "id": "chatcmpl_tool",
+            "choices": [{
+                "finish_reason": "length",
+                "message": {
+                    "role": "assistant",
+                    "content": "Partial tool call",
+                    "tool_calls": [{
+                        "id": "call_lookup_weather",
+                        "type": "function",
+                        "function": {
+                            "name": "lookup_weather",
+                            "arguments": "{\"city\":\"Mad"
+                        }
+                    }]
+                }
+            }]
+        });
+
+        let mapped = map_openai_to_anthropic_response("claude-3-5-sonnet-latest", &response)
+            .expect("response mapping should work");
+        assert_eq!(mapped["stop_reason"], "max_tokens");
+    }
+
+    #[test]
+    fn preserves_malformed_tool_arguments_without_failing() {
+        let response = json!({
+            "id": "chatcmpl_tool",
+            "choices": [{
+                "finish_reason": "length",
+                "message": {
+                    "role": "assistant",
+                    "content": "Partial tool call",
+                    "tool_calls": [{
+                        "id": "call_lookup_weather",
+                        "type": "function",
+                        "function": {
+                            "name": "lookup_weather",
+                            "arguments": "{\"city\":\"Mad"
+                        }
+                    }]
+                }
+            }]
+        });
+
+        let mapped = map_openai_to_anthropic_response("claude-3-5-sonnet-latest", &response)
+            .expect("response mapping should work");
+        assert_eq!(
+            mapped["content"][1]["input"]["__raw_arguments"],
+            "{\"city\":\"Mad"
+        );
+    }
+
+    #[test]
+    fn wraps_non_object_tool_arguments_in_an_object() {
+        let response = json!({
+            "id": "chatcmpl_tool",
+            "choices": [{
+                "finish_reason": "tool_calls",
+                "message": {
+                    "role": "assistant",
+                    "content": "Tool call with array args",
+                    "tool_calls": [{
+                        "id": "call_lookup_weather",
+                        "type": "function",
+                        "function": {
+                            "name": "lookup_weather",
+                            "arguments": "[\"Madrid\",\"ES\"]"
+                        }
+                    }]
+                }
+            }]
+        });
+
+        let mapped = map_openai_to_anthropic_response("claude-3-5-sonnet-latest", &response)
+            .expect("response mapping should work");
+        assert_eq!(
+            mapped["content"][1]["input"]["__value"],
+            json!(["Madrid", "ES"])
+        );
     }
 }
