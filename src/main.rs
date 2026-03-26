@@ -19,7 +19,7 @@ use crate::backend::openai::{OpenAiBackendConfig, OpenAiBackendProvider};
 use crate::cli::{AuthCommand, ParsedCli};
 use crate::config::AppConfig;
 use crate::error::AppError;
-use crate::process::{reserve_local_port, run_claude};
+use crate::process::{reserve_local_port, spawn_claude, terminate_claude, wait_for_claude};
 use crate::server::{serve, AppState};
 use tokio::task::JoinHandle;
 
@@ -58,7 +58,15 @@ async fn run() -> Result<(), AppError> {
             let port = reserve_local_port()?;
             let state = AppState { auth, backend };
             let server_task: JoinHandle<anyhow::Result<()>> = tokio::spawn(serve(state, port));
-            let run_result = run_claude(&config.claude_binary, port, &claude_args).await;
+            let mut child = spawn_claude(&config.claude_binary, port, &claude_args)?;
+            let run_result = tokio::select! {
+                result = wait_for_claude(&mut child) => result,
+                signal = tokio::signal::ctrl_c() => {
+                    signal.map_err(anyhow::Error::from)?;
+                    terminate_claude(&mut child).await?;
+                    Err(AppError::Message("received interrupt signal".to_string()))
+                }
+            };
             server_task.abort();
             run_result?;
             Ok(())
