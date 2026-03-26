@@ -11,4 +11,3 @@ impl From<clap::Error> for AppError {
         Self::Message(value.to_string())
     }
 }
-
