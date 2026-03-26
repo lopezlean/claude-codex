@@ -207,6 +207,76 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn streams_openai_tool_calls_as_anthropic_sse_events() {
+        let _guard = lock_network_test();
+        let upstream = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/chat/completions"))
+            .respond_with(ResponseTemplate::new(200).set_body_raw(
+                "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_lookup_weather\",\"type\":\"function\",\"function\":{\"name\":\"lookup_weather\",\"arguments\":\"\"}}]}}]}\n\n\
+                 data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"arguments\":\"{\\\"city\\\":\\\"Madrid\\\"}\"}}]}}]}\n\n\
+                 data: {\"choices\":[{\"finish_reason\":\"tool_calls\"}]}\n\n\
+                 data: [DONE]\n\n",
+                "text/event-stream",
+            ))
+            .mount(&upstream)
+            .await;
+
+        let router = build_router_for_test(&upstream.uri()).await;
+        let response = router
+            .oneshot(
+                axum::http::Request::post("/v1/messages")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        r#"{
+                          "model":"claude-3-5-sonnet-latest",
+                          "messages":[{"role":"user","content":[{"type":"text","text":"What's the weather in Madrid?"}]}],
+                          "stream":true
+                        }"#,
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .expect("response");
+
+        assert_eq!(response.status(), axum::http::StatusCode::OK);
+        assert_eq!(
+            response.headers().get("content-type").unwrap(),
+            "text/event-stream"
+        );
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        let raw = String::from_utf8(body.to_vec()).unwrap();
+        assert!(
+            raw.contains("event: message_start"),
+            "unexpected body: {raw}"
+        );
+        assert!(
+            raw.contains("event: content_block_start"),
+            "unexpected body: {raw}"
+        );
+        assert!(
+            raw.contains("\"type\":\"tool_use\""),
+            "unexpected body: {raw}"
+        );
+        assert!(
+            raw.contains("\"partial_json\":\"{\\\"city\\\":\\\"Madrid\\\"}\""),
+            "unexpected body: {raw}"
+        );
+        assert!(
+            raw.contains("event: message_delta"),
+            "unexpected body: {raw}"
+        );
+        assert!(
+            raw.contains("\"stop_reason\":\"tool_use\""),
+            "unexpected body: {raw}"
+        );
+        assert!(
+            raw.contains("event: message_stop"),
+            "unexpected body: {raw}"
+        );
+    }
+
+    #[tokio::test]
     async fn does_not_fail_when_openai_tool_arguments_are_malformed() {
         let _guard = lock_network_test();
         let upstream = MockServer::start().await;

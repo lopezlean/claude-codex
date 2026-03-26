@@ -148,7 +148,7 @@ pub fn map_openai_to_anthropic_response(model: &str, response: &Value) -> Result
     }))
 }
 
-fn map_stop_reason(finish_reason: Option<&str>, has_tool_calls: bool) -> &'static str {
+pub(crate) fn map_stop_reason(finish_reason: Option<&str>, has_tool_calls: bool) -> &'static str {
     match finish_reason {
         Some("length") => "max_tokens",
         Some("tool_calls") | Some("function_call") => "tool_use",

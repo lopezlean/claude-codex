@@ -7,7 +7,7 @@ use futures_util::StreamExt;
 
 use crate::protocol::anthropic::AnthropicMessagesRequest;
 use crate::protocol::mapper::{map_anthropic_to_openai, map_openai_to_anthropic_response};
-use crate::protocol::stream::translate_openai_sse_frame;
+use crate::protocol::stream::OpenAiSseTranslator;
 use crate::server::AppState;
 
 pub async fn create_message(
@@ -22,15 +22,16 @@ pub async fn create_message(
     let mapped = map_anthropic_to_openai(&request).map_err(internal_error)?;
 
     if request.stream {
+        let mut translator = OpenAiSseTranslator::default();
         let stream = state
             .backend
             .send_chat_stream(&access_token, &mapped)
             .await
             .map_err(internal_error)?
-            .map(|chunk| {
+            .map(move |chunk| {
                 let bytes = chunk?;
                 let raw = String::from_utf8_lossy(&bytes);
-                let translated = translate_openai_sse_frame(&raw)?;
+                let translated = translator.push_chunk(&raw)?;
                 Ok::<Bytes, anyhow::Error>(Bytes::from(translated))
             });
 
