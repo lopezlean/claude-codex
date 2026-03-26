@@ -381,6 +381,7 @@ mod tests {
     use std::io::{Read, Write};
     use std::net::{TcpListener, TcpStream};
     use std::sync::Arc;
+    use std::time::{Duration, Instant};
 
     use anyhow::{anyhow, Result};
     use tempfile::tempdir;
@@ -559,8 +560,7 @@ mod tests {
             "unexpected error: {error}"
         );
 
-        TcpListener::bind(("127.0.0.1", callback_port))
-            .expect("callback port should be released when login fails");
+        assert_port_released_within(callback_port, Duration::from_millis(250));
     }
 
     fn test_provider(port: u16) -> OpenAiAuthProvider {
@@ -600,5 +600,28 @@ mod tests {
         .expect("callback request should write");
         let mut response = String::new();
         let _ = stream.read_to_string(&mut response);
+    }
+
+    fn assert_port_released_within(port: u16, timeout: Duration) {
+        let deadline = Instant::now() + timeout;
+        loop {
+            match TcpListener::bind(("127.0.0.1", port)) {
+                Ok(listener) => {
+                    drop(listener);
+                    return;
+                }
+                Err(error) if Instant::now() < deadline => {
+                    assert_eq!(
+                        error.kind(),
+                        std::io::ErrorKind::AddrInUse,
+                        "unexpected bind error while waiting for port release: {error}"
+                    );
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+                Err(error) => {
+                    panic!("callback port should be released when login fails: {error}");
+                }
+            }
+        }
     }
 }
