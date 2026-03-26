@@ -9,7 +9,7 @@ use tokio::process::{Child, Command};
 
 use crate::error::AppError;
 
-const DEFAULT_BACKEND_MODEL: &str = "gpt-4o";
+const DEFAULT_BACKEND_MODEL: &str = "gpt-5-codex-mini";
 
 pub fn reserve_local_port() -> Result<u16> {
     let listener = TcpListener::bind(("127.0.0.1", 0))?;

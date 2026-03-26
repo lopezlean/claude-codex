@@ -50,6 +50,7 @@ async fn run() -> Result<(), AppError> {
     let backend = Arc::new(OpenAiBackendProvider::new(OpenAiBackendConfig {
         base_url: config.upstream_base_url.clone(),
         chat_completions_path: "/v1/chat/completions".to_string(),
+        codex_responses_url: "https://chatgpt.com/backend-api/codex/responses".to_string(),
     }));
 
     match cli {

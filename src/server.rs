@@ -131,6 +131,7 @@ mod tests {
             OpenAiBackendConfig {
                 base_url: upstream.uri(),
                 chat_completions_path: "/v1/chat/completions".to_string(),
+                codex_responses_url: format!("{}/backend-api/codex/responses", upstream.uri()),
             },
         )
         .await;
@@ -553,6 +554,10 @@ mod tests {
                 OpenAiBackendConfig {
                     base_url: upstream_base_url.to_string(),
                     chat_completions_path: "/v1/chat/completions".to_string(),
+                    codex_responses_url: format!(
+                        "{}/backend-api/codex/responses",
+                        upstream_base_url
+                    ),
                 },
             )
             .await,
@@ -568,6 +573,10 @@ mod tests {
                 OpenAiBackendConfig {
                     base_url: upstream_base_url.to_string(),
                     chat_completions_path: "/v1/chat/completions".to_string(),
+                    codex_responses_url: format!(
+                        "{}/backend-api/codex/responses",
+                        upstream_base_url
+                    ),
                 },
             )
             .await,

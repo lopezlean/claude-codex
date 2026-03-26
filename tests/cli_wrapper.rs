@@ -58,7 +58,7 @@ fn run_mode_launches_claude_with_proxy_environment() {
     assert!(captured.contains("TOKEN=claude-codex-proxy"));
     assert!(captured.contains("KEY="));
     assert!(captured.contains("ATTR=0"));
-    assert!(captured.contains("ARGS=--model gpt-4o --print hello"));
+    assert!(captured.contains("ARGS=--model gpt-5-codex-mini --print hello"));
 }
 
 #[test]
@@ -164,11 +164,11 @@ fn run_mode_defaults_all_model_tiers_to_default_backend_model() {
         .success();
 
     let captured = fs::read_to_string(capture_path).expect("capture");
-    assert!(captured.contains("OPUS=gpt-4o"));
-    assert!(captured.contains("SONNET=gpt-4o"));
-    assert!(captured.contains("HAIKU=gpt-4o"));
-    assert!(captured.contains("SUBAGENT=gpt-4o"));
-    assert!(captured.contains("ARGS=--model gpt-4o"));
+    assert!(captured.contains("OPUS=gpt-5-codex-mini"));
+    assert!(captured.contains("SONNET=gpt-5-codex-mini"));
+    assert!(captured.contains("HAIKU=gpt-5-codex-mini"));
+    assert!(captured.contains("SUBAGENT=gpt-5-codex-mini"));
+    assert!(captured.contains("ARGS=--model gpt-5-codex-mini"));
 }
 
 #[cfg(unix)]
