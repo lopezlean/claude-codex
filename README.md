@@ -137,7 +137,7 @@ cargo fmt --check
 cargo test
 ```
 
-The repository also includes design notes under `docs/superpowers/specs/` for the proxy, auth, docs, and model-selection work.
+The repository also includes design notes under `docs/specs/` for the core proxy/auth work and model-selection behavior.
 
 ## Limitations
 
