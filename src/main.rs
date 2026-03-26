@@ -13,7 +13,7 @@ use crate::error::AppError;
 #[tokio::main]
 async fn main() -> Result<(), AppError> {
     tracing_subscriber::fmt().with_env_filter("info").init();
-    let config = AppConfig::from_env();
+    let config = AppConfig::from_env()?;
     let auth = OpenAiAuthProvider::new(
         OpenAiAuthConfig {
             client_id: "app_EMoamEEZ73f0CkXaXp7hrann".to_string(),

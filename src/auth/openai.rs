@@ -1,4 +1,5 @@
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::{fmt, sync::Arc};
 
 use anyhow::{anyhow, bail, Context, Result};
 use async_trait::async_trait;
@@ -13,6 +14,9 @@ use crate::auth::session::{CodexAuthFile, CodexTokens};
 use crate::auth::session_store::FileSessionStore;
 
 const ACCESS_TOKEN_LIFETIME_SECS: u64 = 3600;
+const CALLBACK_HOST: &str = "127.0.0.1";
+
+type BrowserOpener = Arc<dyn Fn(&str) -> Result<()> + Send + Sync>;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OpenAiAuthConfig {
@@ -24,15 +28,24 @@ pub struct OpenAiAuthConfig {
     pub refresh_grace_period_secs: u64,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct OpenAiAuthProvider {
     client: Client,
     config: OpenAiAuthConfig,
     store: FileSessionStore,
+    browser_opener: BrowserOpener,
 }
 
 impl OpenAiAuthProvider {
     pub fn new(config: OpenAiAuthConfig, store: FileSessionStore) -> Self {
+        Self::new_with_browser_opener(config, store, Arc::new(default_browser_opener))
+    }
+
+    pub fn new_with_browser_opener(
+        config: OpenAiAuthConfig,
+        store: FileSessionStore,
+        browser_opener: BrowserOpener,
+    ) -> Self {
         let client = Client::builder()
             .timeout(Duration::from_secs(120))
             .build()
@@ -41,6 +54,7 @@ impl OpenAiAuthProvider {
             client,
             config,
             store,
+            browser_opener,
         }
     }
 
@@ -48,11 +62,12 @@ impl OpenAiAuthProvider {
         &self.store
     }
 
+    fn callback_origin(&self) -> String {
+        format!("http://{CALLBACK_HOST}:{}", self.config.redirect_port)
+    }
+
     fn redirect_uri(&self) -> String {
-        format!(
-            "http://localhost:{}/auth/callback",
-            self.config.redirect_port
-        )
+        format!("{}/auth/callback", self.callback_origin())
     }
 
     fn authorize_url(&self, challenge: &str, state: &str) -> Result<String> {
@@ -113,67 +128,6 @@ impl OpenAiAuthProvider {
         Ok(auth)
     }
 
-    fn receive_callback_code(&self, expected_state: &str) -> Result<String> {
-        let server = Server::http(("127.0.0.1", self.config.redirect_port))
-            .map_err(|error| anyhow!("failed to bind OpenAI callback server: {error}"))?;
-
-        for _ in 0..self.config.callback_timeout_secs {
-            if let Ok(Some(request)) = server.recv_timeout(Duration::from_secs(1)) {
-                let callback_url = format!(
-                    "http://localhost:{}{}",
-                    self.config.redirect_port,
-                    request.url()
-                );
-                let parsed = Url::parse(&callback_url).with_context(|| {
-                    format!("failed to parse OAuth callback URL: {callback_url}")
-                })?;
-
-                if let Some((_, error)) = parsed.query_pairs().find(|(key, _)| key == "error") {
-                    let response = Response::from_string(
-                        "<html><body><h1>claude-codex</h1><p>Authorization failed.</p></body></html>",
-                    )
-                    .with_header(
-                        Header::from_bytes(&b"Content-Type"[..], &b"text/html"[..])
-                            .expect("static header should be valid"),
-                    );
-                    let _ = request.respond(response);
-                    bail!("OpenAI authorization failed: {error}");
-                }
-
-                let callback_state = parsed
-                    .query_pairs()
-                    .find(|(key, _)| key == "state")
-                    .map(|(_, value)| value.into_owned())
-                    .ok_or_else(|| anyhow!("oauth callback missing state"))?;
-                if callback_state != expected_state {
-                    let response = Response::from_string(
-                        "<html><body><h1>claude-codex</h1><p>Authorization state mismatch.</p></body></html>",
-                    )
-                    .with_header(
-                        Header::from_bytes(&b"Content-Type"[..], &b"text/html"[..])
-                            .expect("static header should be valid"),
-                    );
-                    let _ = request.respond(response);
-                    bail!("oauth callback state mismatch");
-                }
-
-                if let Some((_, code)) = parsed.query_pairs().find(|(key, _)| key == "code") {
-                    let response = Response::from_string(
-                        "<html><body><h1>claude-codex</h1><p>Authorization completed.</p></body></html>",
-                    )
-                    .with_header(
-                        Header::from_bytes(&b"Content-Type"[..], &b"text/html"[..])
-                            .expect("static header should be valid"),
-                    );
-                    let _ = request.respond(response);
-                    return Ok(code.into_owned());
-                }
-            }
-        }
-
-        bail!("oauth callback timed out");
-    }
-
     fn should_refresh(&self, session: &CodexAuthFile) -> bool {
         let refresh_token = match session.tokens.refresh_token.as_deref() {
             Some(value) if !value.is_empty() => value,
@@ -206,17 +160,34 @@ impl OpenAiAuthProvider {
     }
 }
 
+impl fmt::Debug for OpenAiAuthProvider {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("OpenAiAuthProvider")
+            .field("config", &self.config)
+            .field("store", &self.store)
+            .finish_non_exhaustive()
+    }
+}
+
 #[async_trait]
 impl AuthProvider for OpenAiAuthProvider {
     async fn login(&self) -> Result<()> {
         let (challenge, verifier) = PkceCodeChallenge::new_random_sha256();
         let state = CsrfToken::new_random();
+        let callback_listener =
+            CallbackListener::bind(self.config.redirect_port, self.callback_origin())?;
+        let expected_state = state.secret().to_string();
+        let callback_timeout_secs = self.config.callback_timeout_secs;
+        let callback_task = tokio::task::spawn_blocking(move || {
+            callback_listener.wait_for_code(&expected_state, callback_timeout_secs)
+        });
         let auth_url = self.authorize_url(challenge.as_str(), state.secret())?;
 
-        webbrowser::open(auth_url.as_str())
-            .context("failed to open the OpenAI authorization page in a browser")?;
+        (self.browser_opener)(auth_url.as_str())?;
 
-        let code = self.receive_callback_code(state.secret())?;
+        let code = callback_task
+            .await
+            .context("OpenAI callback listener task failed")??;
         let redirect_uri = self.redirect_uri();
         let response = self
             .client
@@ -306,6 +277,89 @@ impl AuthProvider for OpenAiAuthProvider {
     }
 }
 
+fn default_browser_opener(auth_url: &str) -> Result<()> {
+    webbrowser::open(auth_url)
+        .context("failed to open the OpenAI authorization page in a browser")?;
+    Ok(())
+}
+
+struct CallbackListener {
+    server: Server,
+    callback_origin: String,
+}
+
+impl CallbackListener {
+    fn bind(port: u16, callback_origin: String) -> Result<Self> {
+        let server = Server::http((CALLBACK_HOST, port))
+            .map_err(|error| anyhow!("failed to bind OpenAI callback server: {error}"))?;
+        Ok(Self {
+            server,
+            callback_origin,
+        })
+    }
+
+    fn wait_for_code(self, expected_state: &str, timeout_secs: u64) -> Result<String> {
+        for _ in 0..timeout_secs {
+            if let Ok(Some(request)) = self.server.recv_timeout(Duration::from_secs(1)) {
+                let callback_url = format!("{}{}", self.callback_origin, request.url());
+                let parsed = Url::parse(&callback_url).with_context(|| {
+                    format!("failed to parse OAuth callback URL: {callback_url}")
+                })?;
+
+                if let Some((_, error)) = parsed.query_pairs().find(|(key, _)| key == "error") {
+                    let response = failure_response("Authorization failed.");
+                    let _ = request.respond(response);
+                    bail!("OpenAI authorization failed: {error}");
+                }
+
+                let callback_state = parsed
+                    .query_pairs()
+                    .find(|(key, _)| key == "state")
+                    .map(|(_, value)| value.into_owned())
+                    .ok_or_else(|| anyhow!("oauth callback missing state"))?;
+                if callback_state != expected_state {
+                    let response = failure_response("Authorization state mismatch.");
+                    let _ = request.respond(response);
+                    bail!("oauth callback state mismatch");
+                }
+
+                if let Some((_, code)) = parsed.query_pairs().find(|(key, _)| key == "code") {
+                    let response = success_response();
+                    let _ = request.respond(response);
+                    return Ok(code.into_owned());
+                }
+            }
+        }
+
+        bail!("oauth callback timed out");
+    }
+}
+
+fn success_response() -> Response<std::io::Cursor<Vec<u8>>> {
+    html_response("<html><body><h1>claude-codex</h1><p>Authorization completed.</p></body></html>")
+}
+
+fn failure_response(message: &str) -> Response<std::io::Cursor<Vec<u8>>> {
+    html_response(&format!(
+        "<html><body><h1>claude-codex</h1><p>{message}</p></body></html>"
+    ))
+}
+
+fn html_response(body: &str) -> Response<std::io::Cursor<Vec<u8>>> {
+    Response::from_string(body).with_header(
+        Header::from_bytes(&b"Content-Type"[..], &b"text/html"[..])
+            .expect("static header should be valid"),
+    )
+}
+
+impl fmt::Debug for CallbackListener {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("CallbackListener")
+            .field("callback_origin", &self.callback_origin)
+            .finish_non_exhaustive()
+    }
+}
+
 #[derive(Debug, Deserialize)]
 struct TokenResponse {
     access_token: String,
@@ -324,7 +378,13 @@ fn current_timestamp_secs() -> u64 {
 
 #[cfg(test)]
 mod tests {
+    use std::io::{Read, Write};
+    use std::net::{TcpListener, TcpStream};
+    use std::sync::Arc;
+
+    use anyhow::Result;
     use tempfile::tempdir;
+    use url::Url;
     use wiremock::matchers::{body_string_contains, method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
@@ -391,5 +451,117 @@ mod tests {
             .expect("present");
         assert_eq!(saved.tokens.access_token.as_deref(), Some("new-access"));
         assert_eq!(saved.tokens.refresh_token.as_deref(), Some("new-refresh"));
+    }
+
+    #[test]
+    fn callback_origin_and_redirect_uri_use_the_same_loopback_host() {
+        let provider = test_provider(1455);
+
+        assert_eq!(provider.callback_origin(), "http://127.0.0.1:1455");
+        assert_eq!(
+            provider.redirect_uri(),
+            "http://127.0.0.1:1455/auth/callback"
+        );
+    }
+
+    #[tokio::test]
+    async fn login_accepts_an_immediate_callback_after_opening_the_browser() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/oauth/token"))
+            .and(body_string_contains("grant_type=authorization_code"))
+            .and(body_string_contains("code=fast-code"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_raw(
+                    r#"{"access_token":"login-access","refresh_token":"login-refresh","id_token":"login-id"}"#,
+                    "application/json",
+                ),
+            )
+            .mount(&server)
+            .await;
+
+        let dir = tempdir().expect("temp dir");
+        let auth_path = dir.path().join("auth.json");
+        let store = FileSessionStore::new(auth_path);
+        let callback_port = reserve_loopback_port();
+        let opener = Arc::new(move |auth_url: &str| -> Result<()> {
+            let auth_url = Url::parse(auth_url).expect("auth url should parse");
+            let redirect_uri = auth_url
+                .query_pairs()
+                .find(|(key, _)| key == "redirect_uri")
+                .map(|(_, value)| value.into_owned())
+                .expect("redirect_uri should be present");
+            let state = auth_url
+                .query_pairs()
+                .find(|(key, _)| key == "state")
+                .map(|(_, value)| value.into_owned())
+                .expect("state should be present");
+
+            std::thread::spawn(move || send_callback(&redirect_uri, "fast-code", &state));
+            Ok(())
+        });
+
+        let provider = OpenAiAuthProvider::new_with_browser_opener(
+            OpenAiAuthConfig {
+                client_id: "client-id".to_string(),
+                auth_url: "https://auth.openai.com/oauth/authorize".to_string(),
+                token_url: format!("{}/oauth/token", server.uri()),
+                redirect_port: callback_port,
+                callback_timeout_secs: 2,
+                refresh_grace_period_secs: 60,
+            },
+            store,
+            opener,
+        );
+
+        provider.login().await.expect("login should succeed");
+
+        let saved = provider
+            .session_store()
+            .load()
+            .expect("load")
+            .expect("present");
+        assert_eq!(saved.tokens.access_token.as_deref(), Some("login-access"));
+        assert_eq!(saved.tokens.refresh_token.as_deref(), Some("login-refresh"));
+        assert_eq!(saved.tokens.id_token.as_deref(), Some("login-id"));
+    }
+
+    fn test_provider(port: u16) -> OpenAiAuthProvider {
+        let dir = tempdir().expect("temp dir");
+        OpenAiAuthProvider::new(
+            OpenAiAuthConfig {
+                client_id: "client-id".to_string(),
+                auth_url: "https://auth.openai.com/oauth/authorize".to_string(),
+                token_url: "https://auth.openai.com/oauth/token".to_string(),
+                redirect_port: port,
+                callback_timeout_secs: 1,
+                refresh_grace_period_secs: 60,
+            },
+            FileSessionStore::new(dir.path().join("auth.json")),
+        )
+    }
+
+    fn reserve_loopback_port() -> u16 {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind ephemeral port");
+        let port = listener.local_addr().expect("local addr").port();
+        drop(listener);
+        port
+    }
+
+    fn send_callback(redirect_uri: &str, code: &str, state: &str) {
+        let url = Url::parse(redirect_uri).expect("redirect uri should parse");
+        let host = url.host_str().expect("host should be present");
+        let port = url.port_or_known_default().expect("port should be present");
+        let path = format!("{}?code={code}&state={state}", url.path());
+
+        let mut stream =
+            TcpStream::connect((host, port)).expect("callback listener should be accepting");
+        write!(
+            stream,
+            "GET {path} HTTP/1.1\r\nHost: {host}:{port}\r\nConnection: close\r\n\r\n"
+        )
+        .expect("callback request should write");
+        let mut response = String::new();
+        let _ = stream.read_to_string(&mut response);
     }
 }
