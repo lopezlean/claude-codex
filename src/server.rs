@@ -125,6 +125,7 @@ mod tests {
                     .body(Body::from(
                         r#"{
                           "model":"claude-3-5-sonnet-latest",
+                          "system":"You are concise.",
                           "messages":[{"role":"user","content":[{"type":"text","text":"Hello world"}]}]
                         }"#,
                     ))
@@ -134,6 +135,9 @@ mod tests {
             .expect("response");
 
         assert_eq!(response.status(), axum::http::StatusCode::OK);
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        let raw = String::from_utf8(body.to_vec()).unwrap();
+        assert!(raw.contains("\"input_tokens\":5"), "unexpected body: {raw}");
     }
 
     async fn build_router_for_test(upstream_base_url: &str) -> axum::Router {

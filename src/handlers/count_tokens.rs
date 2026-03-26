@@ -11,7 +11,11 @@ pub struct CountTokensResponse {
 pub async fn count_tokens(
     Json(request): Json<AnthropicMessagesRequest>,
 ) -> Json<CountTokensResponse> {
-    let mut input_tokens = 0usize;
+    let mut input_tokens = request
+        .system
+        .as_deref()
+        .map(|system| system.split_whitespace().count())
+        .unwrap_or(0);
     for message in request.messages {
         for block in message.content {
             input_tokens += match block {
