@@ -26,7 +26,7 @@ fn run_mode_launches_claude_with_proxy_environment() {
     .expect("auth file");
 
     let script = format!(
-        "#!/bin/sh\nprintf 'BASE=%s\\nKEY=%s\\nARGS=%s\\n' \"$ANTHROPIC_BASE_URL\" \"$ANTHROPIC_API_KEY\" \"$*\" > \"{}\"\n",
+        "#!/bin/sh\nprintf 'BASE=%s\\nTOKEN=%s\\nKEY=%s\\nARGS=%s\\n' \"$ANTHROPIC_BASE_URL\" \"$ANTHROPIC_AUTH_TOKEN\" \"${{ANTHROPIC_API_KEY-unset}}\" \"$*\" > \"{}\"\n",
         capture_path.display()
     );
     let claude_path = bin_dir.join("claude");
@@ -46,6 +46,7 @@ fn run_mode_launches_claude_with_proxy_environment() {
             "PATH",
             format!("{}:{}", bin_dir.display(), std::env::var("PATH").unwrap()),
         )
+        .env("ANTHROPIC_API_KEY", "should-be-removed")
         .arg("--print")
         .arg("hello")
         .assert()
@@ -53,7 +54,8 @@ fn run_mode_launches_claude_with_proxy_environment() {
 
     let captured = fs::read_to_string(capture_path).expect("capture");
     assert!(captured.contains("BASE=http://127.0.0.1:"));
-    assert!(captured.contains("KEY=sk-ant-codex-proxy"));
+    assert!(captured.contains("TOKEN=claude-codex-proxy"));
+    assert!(captured.contains("KEY=unset"));
     assert!(captured.contains("ARGS=--print hello"));
 }
 
