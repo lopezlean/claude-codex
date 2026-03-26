@@ -7,10 +7,19 @@ pub struct OpenAiChatRequest {
     pub messages: Vec<OpenAiChatMessage>,
     #[serde(default)]
     pub tools: Vec<OpenAiToolDefinition>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_choice: Option<OpenAiToolChoice>,
     #[serde(default)]
     pub stream: bool,
     #[serde(default)]
     pub max_tokens: Option<u32>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum OpenAiToolChoice {
+    Auto,
+    Required,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
