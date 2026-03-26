@@ -61,7 +61,7 @@ fn run_mode_launches_claude_with_proxy_environment() {
 }
 
 #[test]
-fn run_mode_routes_all_model_tiers_to_the_selected_model() {
+fn run_mode_normalizes_legacy_model_flags_for_claude_code() {
     let dir = tempdir().expect("temp dir");
     let bin_dir = dir.path().join("bin");
     let home_dir = dir.path().join("home");
@@ -82,7 +82,7 @@ fn run_mode_routes_all_model_tiers_to_the_selected_model() {
     .expect("auth file");
 
     let script = format!(
-        "#!/bin/sh\nprintf 'OPUS=%s\\nSONNET=%s\\nHAIKU=%s\\nSUBAGENT=%s\\n' \"$ANTHROPIC_DEFAULT_OPUS_MODEL\" \"$ANTHROPIC_DEFAULT_SONNET_MODEL\" \"$ANTHROPIC_DEFAULT_HAIKU_MODEL\" \"$CLAUDE_CODE_SUBAGENT_MODEL\" > \"{}\"\n",
+        "#!/bin/sh\nprintf 'MODEL=%s\\nOPUS=%s\\nSONNET=%s\\nHAIKU=%s\\nSUBAGENT=%s\\nARGS=%s\\n' \"$ANTHROPIC_MODEL\" \"$ANTHROPIC_DEFAULT_OPUS_MODEL\" \"$ANTHROPIC_DEFAULT_SONNET_MODEL\" \"$ANTHROPIC_DEFAULT_HAIKU_MODEL\" \"$CLAUDE_CODE_SUBAGENT_MODEL\" \"$*\" > \"{}\"\n",
         capture_path.display()
     );
     let claude_path = bin_dir.join("claude");
@@ -104,18 +104,22 @@ fn run_mode_routes_all_model_tiers_to_the_selected_model() {
         )
         .arg("--model")
         .arg("claude-3-5-sonnet-latest")
+        .arg("--print")
+        .arg("hello")
         .assert()
         .success();
 
     let captured = fs::read_to_string(capture_path).expect("capture");
-    assert!(captured.contains("OPUS=claude-3-5-sonnet-latest"));
-    assert!(captured.contains("SONNET=claude-3-5-sonnet-latest"));
-    assert!(captured.contains("HAIKU=claude-3-5-sonnet-latest"));
-    assert!(captured.contains("SUBAGENT=claude-3-5-sonnet-latest"));
+    assert!(captured.contains("MODEL=sonnet"));
+    assert!(captured.contains("OPUS=claude-opus-4-1-20250805"));
+    assert!(captured.contains("SONNET=claude-sonnet-4-20250514"));
+    assert!(captured.contains("HAIKU=claude-3-5-haiku-20241022"));
+    assert!(captured.contains("SUBAGENT=claude-sonnet-4-20250514"));
+    assert!(captured.contains("ARGS=--print hello"));
 }
 
 #[test]
-fn run_mode_defaults_all_model_tiers_to_supported_sonnet_alias() {
+fn run_mode_defaults_to_supported_claude_code_model_configuration() {
     let dir = tempdir().expect("temp dir");
     let bin_dir = dir.path().join("bin");
     let home_dir = dir.path().join("home");
@@ -136,7 +140,7 @@ fn run_mode_defaults_all_model_tiers_to_supported_sonnet_alias() {
     .expect("auth file");
 
     let script = format!(
-        "#!/bin/sh\nprintf 'OPUS=%s\\nSONNET=%s\\nHAIKU=%s\\nSUBAGENT=%s\\n' \"$ANTHROPIC_DEFAULT_OPUS_MODEL\" \"$ANTHROPIC_DEFAULT_SONNET_MODEL\" \"$ANTHROPIC_DEFAULT_HAIKU_MODEL\" \"$CLAUDE_CODE_SUBAGENT_MODEL\" > \"{}\"\n",
+        "#!/bin/sh\nprintf 'MODEL=%s\\nOPUS=%s\\nSONNET=%s\\nHAIKU=%s\\nSUBAGENT=%s\\n' \"$ANTHROPIC_MODEL\" \"$ANTHROPIC_DEFAULT_OPUS_MODEL\" \"$ANTHROPIC_DEFAULT_SONNET_MODEL\" \"$ANTHROPIC_DEFAULT_HAIKU_MODEL\" \"$CLAUDE_CODE_SUBAGENT_MODEL\" > \"{}\"\n",
         capture_path.display()
     );
     let claude_path = bin_dir.join("claude");
@@ -160,10 +164,11 @@ fn run_mode_defaults_all_model_tiers_to_supported_sonnet_alias() {
         .success();
 
     let captured = fs::read_to_string(capture_path).expect("capture");
-    assert!(captured.contains("OPUS=claude-3-5-sonnet-latest"));
-    assert!(captured.contains("SONNET=claude-3-5-sonnet-latest"));
-    assert!(captured.contains("HAIKU=claude-3-5-sonnet-latest"));
-    assert!(captured.contains("SUBAGENT=claude-3-5-sonnet-latest"));
+    assert!(captured.contains("MODEL=sonnet"));
+    assert!(captured.contains("OPUS=claude-opus-4-1-20250805"));
+    assert!(captured.contains("SONNET=claude-sonnet-4-20250514"));
+    assert!(captured.contains("HAIKU=claude-3-5-haiku-20241022"));
+    assert!(captured.contains("SUBAGENT=claude-sonnet-4-20250514"));
 }
 
 #[cfg(unix)]

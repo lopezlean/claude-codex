@@ -11,9 +11,15 @@ const DEFAULT_MODEL: &str = "gpt-4o";
 const HAIKU_MODEL: &str = "gpt-4o-mini";
 
 pub fn map_model_name(model: &str) -> &'static str {
-    if model.starts_with("claude-3-5-haiku-") {
+    let normalized = model.trim().to_ascii_lowercase();
+
+    if normalized == "haiku" || normalized.contains("haiku") {
         HAIKU_MODEL
-    } else if model.starts_with("claude-3-5-sonnet-") {
+    } else if normalized == "sonnet"
+        || normalized == "opus"
+        || normalized.contains("sonnet")
+        || normalized.contains("opus")
+    {
         DEFAULT_MODEL
     } else {
         DEFAULT_MODEL
@@ -402,6 +408,16 @@ mod tests {
     #[test]
     fn falls_back_to_default_model_for_unknown_claude_alias() {
         assert_eq!(map_model_name("claude-unknown"), "gpt-4o");
+    }
+
+    #[test]
+    fn maps_current_claude_aliases_and_snapshots_to_openai_models() {
+        assert_eq!(map_model_name("sonnet"), "gpt-4o");
+        assert_eq!(map_model_name("opus"), "gpt-4o");
+        assert_eq!(map_model_name("haiku"), "gpt-4o-mini");
+        assert_eq!(map_model_name("claude-sonnet-4-20250514"), "gpt-4o");
+        assert_eq!(map_model_name("claude-opus-4-1-20250805"), "gpt-4o");
+        assert_eq!(map_model_name("claude-3-5-haiku-20241022"), "gpt-4o-mini");
     }
 
     #[test]
