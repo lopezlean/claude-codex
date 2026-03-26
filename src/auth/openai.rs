@@ -176,15 +176,15 @@ impl AuthProvider for OpenAiAuthProvider {
         let state = CsrfToken::new_random();
         let callback_listener =
             CallbackListener::bind(self.config.redirect_port, self.callback_origin())?;
+        let auth_url = self.authorize_url(challenge.as_str(), state.secret())?;
+
+        (self.browser_opener)(auth_url.as_str())?;
+
         let expected_state = state.secret().to_string();
         let callback_timeout_secs = self.config.callback_timeout_secs;
         let callback_task = tokio::task::spawn_blocking(move || {
             callback_listener.wait_for_code(&expected_state, callback_timeout_secs)
         });
-        let auth_url = self.authorize_url(challenge.as_str(), state.secret())?;
-
-        (self.browser_opener)(auth_url.as_str())?;
-
         let code = callback_task
             .await
             .context("OpenAI callback listener task failed")??;
@@ -381,8 +381,9 @@ mod tests {
     use std::io::{Read, Write};
     use std::net::{TcpListener, TcpStream};
     use std::sync::Arc;
+    use std::sync::Mutex;
 
-    use anyhow::Result;
+    use anyhow::{anyhow, Result};
     use tempfile::tempdir;
     use url::Url;
     use wiremock::matchers::{body_string_contains, method, path};
@@ -393,6 +394,8 @@ mod tests {
     use crate::auth::session_store::FileSessionStore;
 
     use super::{OpenAiAuthConfig, OpenAiAuthProvider};
+
+    static LOGIN_TEST_LOCK: Mutex<()> = Mutex::new(());
 
     #[tokio::test]
     async fn refreshes_an_expiring_session_and_persists_new_tokens() {
@@ -466,6 +469,7 @@ mod tests {
 
     #[tokio::test]
     async fn login_accepts_an_immediate_callback_after_opening_the_browser() {
+        let _guard = LOGIN_TEST_LOCK.lock().expect("lock login test mutex");
         let server = MockServer::start().await;
         Mock::given(method("POST"))
             .and(path("/oauth/token"))
@@ -524,6 +528,40 @@ mod tests {
         assert_eq!(saved.tokens.access_token.as_deref(), Some("login-access"));
         assert_eq!(saved.tokens.refresh_token.as_deref(), Some("login-refresh"));
         assert_eq!(saved.tokens.id_token.as_deref(), Some("login-id"));
+    }
+
+    #[tokio::test]
+    async fn login_releases_the_callback_port_when_opening_the_browser_fails() {
+        let _guard = LOGIN_TEST_LOCK.lock().expect("lock login test mutex");
+        let dir = tempdir().expect("temp dir");
+        let auth_path = dir.path().join("auth.json");
+        let store = FileSessionStore::new(auth_path);
+        let callback_port = reserve_loopback_port();
+        let opener = Arc::new(move |_auth_url: &str| -> Result<()> {
+            Err(anyhow!("synthetic browser failure"))
+        });
+
+        let provider = OpenAiAuthProvider::new_with_browser_opener(
+            OpenAiAuthConfig {
+                client_id: "client-id".to_string(),
+                auth_url: "https://auth.openai.com/oauth/authorize".to_string(),
+                token_url: "https://auth.openai.com/oauth/token".to_string(),
+                redirect_port: callback_port,
+                callback_timeout_secs: 2,
+                refresh_grace_period_secs: 60,
+            },
+            store,
+            opener,
+        );
+
+        let error = provider.login().await.expect_err("login should fail");
+        assert!(
+            error.to_string().contains("synthetic browser failure"),
+            "unexpected error: {error}"
+        );
+
+        TcpListener::bind(("127.0.0.1", callback_port))
+            .expect("callback port should be released when login fails");
     }
 
     fn test_provider(port: u16) -> OpenAiAuthProvider {
