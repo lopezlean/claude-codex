@@ -15,7 +15,11 @@ pub async fn create_message(
     State(state): State<AppState>,
     Json(request): Json<AnthropicMessagesRequest>,
 ) -> Result<Response, (StatusCode, String)> {
-    let access_token = state.auth.ensure_access_token().await.map_err(internal_error)?;
+    let access_token = state
+        .auth
+        .ensure_access_token()
+        .await
+        .map_err(internal_error)?;
     let mapped = map_anthropic_to_openai(&request).map_err(internal_error)?;
 
     if request.stream {
@@ -69,5 +73,6 @@ pub async fn create_message(
 }
 
 fn internal_error(error: impl std::fmt::Display) -> (StatusCode, String) {
-    (StatusCode::INTERNAL_SERVER_ERROR, error.to_string())
+    tracing::error!("proxy request failed: {error}");
+    (StatusCode::BAD_GATEWAY, error.to_string())
 }

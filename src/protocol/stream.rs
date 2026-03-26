@@ -43,3 +43,14 @@ mod tests {
         assert!(translated.contains("event: message_stop"));
     }
 }
+
+#[cfg(test)]
+mod regression_tests {
+    use super::translate_openai_sse_frame;
+
+    #[test]
+    fn done_marker_produces_message_stop_event() {
+        let payload = translate_openai_sse_frame("data: [DONE]").expect("translation");
+        assert!(payload.contains("event: message_stop"));
+    }
+}

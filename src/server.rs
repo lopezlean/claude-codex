@@ -5,12 +5,17 @@ use axum::{
     Router,
 };
 
-use crate::auth::openai::{OpenAiAuthConfig, OpenAiAuthProvider};
 use crate::auth::provider::AuthProvider;
-use crate::auth::session_store::FileSessionStore;
-use crate::backend::openai::{OpenAiBackendConfig, OpenAiBackendProvider};
 use crate::backend::provider::BackendProvider;
 use crate::handlers::{count_tokens::count_tokens, health::health, messages::create_message};
+#[cfg(test)]
+use crate::{
+    auth::{
+        openai::{OpenAiAuthConfig, OpenAiAuthProvider},
+        session_store::FileSessionStore,
+    },
+    backend::openai::{OpenAiBackendConfig, OpenAiBackendProvider},
+};
 
 #[derive(Clone)]
 pub struct AppState {
@@ -19,6 +24,7 @@ pub struct AppState {
 }
 
 impl AppState {
+    #[cfg(test)]
     pub async fn for_tests(store: FileSessionStore, backend: OpenAiBackendConfig) -> Self {
         Self {
             auth: Arc::new(OpenAiAuthProvider::new(
@@ -70,7 +76,11 @@ mod tests {
         let _guard = lock_network_test();
         let router = build_router_for_test("http://127.0.0.1:9").await;
         let response = router
-            .oneshot(axum::http::Request::get("/healthz").body(Body::empty()).unwrap())
+            .oneshot(
+                axum::http::Request::get("/healthz")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
             .await
             .expect("response");
         assert_eq!(response.status(), axum::http::StatusCode::OK);
@@ -146,6 +156,35 @@ mod tests {
         assert!(raw.contains("\"input_tokens\":5"), "unexpected body: {raw}");
     }
 
+    #[tokio::test]
+    async fn returns_bad_gateway_when_authentication_is_missing() {
+        let _guard = lock_network_test();
+        let router = build_router_without_auth_for_test("http://127.0.0.1:9").await;
+        let response = router
+            .oneshot(
+                axum::http::Request::post("/v1/messages")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        r#"{
+                          "model":"claude-3-5-sonnet-latest",
+                          "messages":[{"role":"user","content":[{"type":"text","text":"Hello"}]}],
+                          "stream":false
+                        }"#,
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .expect("response");
+
+        assert_eq!(response.status(), axum::http::StatusCode::BAD_GATEWAY);
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        let raw = String::from_utf8(body.to_vec()).unwrap();
+        assert!(
+            raw.contains("authentication is required"),
+            "unexpected body: {raw}"
+        );
+    }
+
     async fn build_router_for_test(upstream_base_url: &str) -> axum::Router {
         let dir = tempfile::tempdir().expect("temp dir");
         let auth_dir = dir.keep();
@@ -163,6 +202,21 @@ mod tests {
             })
             .expect("seed auth");
 
+        build_router(
+            crate::server::AppState::for_tests(
+                FileSessionStore::new(auth_dir.join("auth.json")),
+                OpenAiBackendConfig {
+                    base_url: upstream_base_url.to_string(),
+                    chat_completions_path: "/v1/chat/completions".to_string(),
+                },
+            )
+            .await,
+        )
+    }
+
+    async fn build_router_without_auth_for_test(upstream_base_url: &str) -> axum::Router {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let auth_dir = dir.keep();
         build_router(
             crate::server::AppState::for_tests(
                 FileSessionStore::new(auth_dir.join("auth.json")),

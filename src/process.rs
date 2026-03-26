@@ -1,9 +1,12 @@
 use std::ffi::OsString;
+use std::io::ErrorKind;
 use std::net::TcpListener;
 use std::process::Stdio;
 
 use anyhow::Result;
 use tokio::process::Command;
+
+use crate::error::AppError;
 
 pub fn reserve_local_port() -> Result<u16> {
     let listener = TcpListener::bind(("127.0.0.1", 0))?;
@@ -12,7 +15,7 @@ pub fn reserve_local_port() -> Result<u16> {
     Ok(port)
 }
 
-pub async fn run_claude(binary: &str, port: u16, args: &[OsString]) -> Result<()> {
+pub async fn run_claude(binary: &str, port: u16, args: &[OsString]) -> Result<(), AppError> {
     let base_url = format!("http://127.0.0.1:{port}/v1");
     let status = Command::new(binary)
         .args(args)
@@ -22,10 +25,16 @@ pub async fn run_claude(binary: &str, port: u16, args: &[OsString]) -> Result<()
         .stdout(Stdio::inherit())
         .stderr(Stdio::inherit())
         .status()
-        .await?;
+        .await
+        .map_err(|error| match error.kind() {
+            ErrorKind::NotFound => AppError::MissingClaudeBinary,
+            _ => AppError::Proxy(error.to_string()),
+        })?;
 
     if !status.success() {
-        anyhow::bail!("claude exited with status {status}");
+        return Err(AppError::Proxy(format!(
+            "claude exited with status {status}"
+        )));
     }
     Ok(())
 }

@@ -16,16 +16,23 @@ use crate::auth::openai::{OpenAiAuthConfig, OpenAiAuthProvider};
 use crate::auth::provider::AuthProvider;
 use crate::auth::session_store::FileSessionStore;
 use crate::backend::openai::{OpenAiBackendConfig, OpenAiBackendProvider};
-use crate::process::{reserve_local_port, run_claude};
-use crate::server::{serve, AppState};
 use crate::cli::{AuthCommand, ParsedCli};
 use crate::config::AppConfig;
 use crate::error::AppError;
+use crate::process::{reserve_local_port, run_claude};
+use crate::server::{serve, AppState};
 use tokio::task::JoinHandle;
 
 #[tokio::main]
-async fn main() -> Result<(), AppError> {
+async fn main() {
     tracing_subscriber::fmt().with_env_filter("info").init();
+    if let Err(error) = run().await {
+        eprintln!("{error}");
+        std::process::exit(1);
+    }
+}
+
+async fn run() -> Result<(), AppError> {
     let cli = cli::parse(std::env::args_os())?;
     let config = AppConfig::from_env()?;
     let store = FileSessionStore::new(config.auth_file.clone());

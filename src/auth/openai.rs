@@ -12,6 +12,7 @@ use url::Url;
 use crate::auth::provider::{AuthProvider, AuthStatus};
 use crate::auth::session::{CodexAuthFile, CodexTokens};
 use crate::auth::session_store::FileSessionStore;
+use crate::error::AppError;
 
 const ACCESS_TOKEN_LIFETIME_SECS: u64 = 3600;
 const CALLBACK_HOST: &str = "127.0.0.1";
@@ -58,6 +59,7 @@ impl OpenAiAuthProvider {
         }
     }
 
+    #[cfg(test)]
     pub fn session_store(&self) -> &FileSessionStore {
         &self.store
     }
@@ -229,7 +231,7 @@ impl AuthProvider for OpenAiAuthProvider {
             .store
             .load()
             .context("failed to load the OpenAI auth session")?
-            .ok_or_else(|| anyhow!("run `claude-codex auth login` first"))?;
+            .ok_or_else(|| anyhow!(AppError::MissingAuth))?;
 
         if self.should_refresh(&existing) {
             let refresh_token = existing
