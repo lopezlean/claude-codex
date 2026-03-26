@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use axum::{
     routing::{get, post},
@@ -57,6 +58,26 @@ pub async fn serve(state: AppState, port: u16) -> anyhow::Result<()> {
     Ok(())
 }
 
+pub async fn wait_until_ready(port: u16) -> anyhow::Result<()> {
+    let deadline = Instant::now() + Duration::from_secs(3);
+    let url = format!("http://127.0.0.1:{port}/healthz");
+    let client = reqwest::Client::new();
+
+    loop {
+        if let Ok(response) = client.get(&url).send().await {
+            if response.status().is_success() {
+                return Ok(());
+            }
+        }
+
+        if Instant::now() >= deadline {
+            anyhow::bail!("proxy did not become ready at {url}");
+        }
+
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use axum::body::Body;
@@ -68,7 +89,7 @@ mod tests {
     use crate::auth::session::{CodexAuthFile, CodexTokens};
     use crate::auth::session_store::FileSessionStore;
     use crate::backend::openai::OpenAiBackendConfig;
-    use crate::server::build_router;
+    use crate::server::{build_router, serve, wait_until_ready};
     use crate::test_support::lock_network_test;
 
     #[tokio::test]
@@ -84,6 +105,46 @@ mod tests {
             .await
             .expect("response");
         assert_eq!(response.status(), axum::http::StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn wait_until_ready_observes_the_live_server() {
+        let _guard = lock_network_test();
+        let upstream = MockServer::start().await;
+        let dir = tempfile::tempdir().expect("temp dir");
+        let auth_dir = dir.keep();
+        let auth_path = auth_dir.join("auth.json");
+        FileSessionStore::new(auth_path)
+            .save(&CodexAuthFile {
+                auth_mode: Some("openai".to_string()),
+                tokens: CodexTokens {
+                    id_token: None,
+                    access_token: Some("access-token".to_string()),
+                    refresh_token: None,
+                    account_id: None,
+                },
+                last_refresh: Some("123".to_string()),
+            })
+            .expect("seed auth");
+        let state = crate::server::AppState::for_tests(
+            FileSessionStore::new(auth_dir.join("auth.json")),
+            OpenAiBackendConfig {
+                base_url: upstream.uri(),
+                chat_completions_path: "/v1/chat/completions".to_string(),
+            },
+        )
+        .await;
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .expect("bind ephemeral port");
+        let port = listener.local_addr().expect("local addr").port();
+        drop(listener);
+
+        let server_task = tokio::spawn(serve(state, port));
+        wait_until_ready(port)
+            .await
+            .expect("server should become ready");
+        server_task.abort();
     }
 
     #[tokio::test]

@@ -20,7 +20,7 @@ use crate::cli::{AuthCommand, ParsedCli};
 use crate::config::AppConfig;
 use crate::error::AppError;
 use crate::process::{reserve_local_port, spawn_claude, terminate_claude, wait_for_claude};
-use crate::server::{serve, AppState};
+use crate::server::{serve, wait_until_ready, AppState};
 use tokio::task::JoinHandle;
 
 #[tokio::main]
@@ -58,6 +58,10 @@ async fn run() -> Result<(), AppError> {
             let port = reserve_local_port()?;
             let state = AppState { auth, backend };
             let server_task: JoinHandle<anyhow::Result<()>> = tokio::spawn(serve(state, port));
+            if let Err(error) = wait_until_ready(port).await {
+                server_task.abort();
+                return Err(AppError::Anyhow(error));
+            }
             let mut child = spawn_claude(&config.claude_binary, port, &claude_args)?;
             let run_result = tokio::select! {
                 result = wait_for_claude(&mut child) => result,

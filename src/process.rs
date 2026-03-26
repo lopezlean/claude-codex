@@ -19,7 +19,7 @@ pub fn reserve_local_port() -> Result<u16> {
 }
 
 pub fn spawn_claude(binary: &str, port: u16, args: &[OsString]) -> Result<Child, AppError> {
-    let base_url = format!("http://127.0.0.1:{port}/v1");
+    let base_url = format!("http://127.0.0.1:{port}");
     let claude_path = resolve_claude_binary(binary)?;
     let (extra_args, selected_model) = extract_selected_model(args);
     let backend_model = selected_model.unwrap_or_else(|| DEFAULT_BACKEND_MODEL.to_string());

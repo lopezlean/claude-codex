@@ -54,6 +54,7 @@ fn run_mode_launches_claude_with_proxy_environment() {
 
     let captured = fs::read_to_string(capture_path).expect("capture");
     assert!(captured.contains("BASE=http://127.0.0.1:"));
+    assert!(!captured.contains("/v1"));
     assert!(captured.contains("TOKEN=claude-codex-proxy"));
     assert!(captured.contains("KEY="));
     assert!(captured.contains("ATTR=0"));
