@@ -395,10 +395,11 @@ mod tests {
 
     use super::{OpenAiAuthConfig, OpenAiAuthProvider};
 
-    static LOGIN_TEST_LOCK: Mutex<()> = Mutex::new(());
+    static NETWORK_TEST_LOCK: Mutex<()> = Mutex::new(());
 
     #[tokio::test]
     async fn refreshes_an_expiring_session_and_persists_new_tokens() {
+        let _guard = NETWORK_TEST_LOCK.lock().expect("lock network test mutex");
         let server = MockServer::start().await;
         let dir = tempdir().expect("temp dir");
         let auth_path = dir.path().join("auth.json");
@@ -469,7 +470,7 @@ mod tests {
 
     #[tokio::test]
     async fn login_accepts_an_immediate_callback_after_opening_the_browser() {
-        let _guard = LOGIN_TEST_LOCK.lock().expect("lock login test mutex");
+        let _guard = NETWORK_TEST_LOCK.lock().expect("lock network test mutex");
         let server = MockServer::start().await;
         Mock::given(method("POST"))
             .and(path("/oauth/token"))
@@ -532,7 +533,7 @@ mod tests {
 
     #[tokio::test]
     async fn login_releases_the_callback_port_when_opening_the_browser_fails() {
-        let _guard = LOGIN_TEST_LOCK.lock().expect("lock login test mutex");
+        let _guard = NETWORK_TEST_LOCK.lock().expect("lock network test mutex");
         let dir = tempdir().expect("temp dir");
         let auth_path = dir.path().join("auth.json");
         let store = FileSessionStore::new(auth_path);
