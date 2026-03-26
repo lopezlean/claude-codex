@@ -1,0 +1,67 @@
+---
+import { site } from "../data/site";
+---
+
+<section id="architecture" class="shell section">
+  <span class="eyebrow">Repository map</span>
+  <h2 class="section-title">The landing mirrors the actual code layout.</h2>
+  <p class="section-copy">
+    These sections are taken from the current repository structure so the public site does not
+    drift into invented modules or stale runtime claims.
+  </p>
+
+  <div class="grid">
+    {
+      site.architecture.map((item) => (
+        <article class="panel card">
+          <code>{item.path}</code>
+          <h3>{item.title}</h3>
+          <p>{item.body}</p>
+        </article>
+      ))
+    }
+  </div>
+</section>
+
+<style>
+  .grid {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 18px;
+    margin-top: 28px;
+  }
+
+  .card {
+    padding: 24px;
+  }
+
+  code {
+    color: var(--cyan);
+    font-family: var(--mono);
+    font-size: 0.86rem;
+  }
+
+  h3 {
+    margin: 18px 0 10px;
+    font-family: var(--display);
+    font-size: 1.25rem;
+  }
+
+  p {
+    margin: 0;
+    color: var(--muted);
+    line-height: 1.75;
+  }
+
+  @media (max-width: 960px) {
+    .grid {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+  }
+
+  @media (max-width: 720px) {
+    .grid {
+      grid-template-columns: 1fr;
+    }
+  }
+</style>

@@ -1,0 +1,142 @@
+---
+import { site } from "../data/site";
+---
+
+<section class="hero shell section">
+  <div class="copy">
+    <span class="eyebrow">{site.hero.eyebrow}</span>
+    <h1>{site.hero.title}</h1>
+    <p>{site.hero.description}</p>
+    <div class="actions">
+      <a class="primary" href={site.repoUrl} target="_blank" rel="noreferrer">Star the repo</a>
+      <a class="secondary" href="#build">See the command flow</a>
+    </div>
+    <div class="meta">
+      <span class="pill">OpenAI-compatible backend bridge</span>
+      <span class="pill">Anthropic-shaped local proxy</span>
+    </div>
+  </div>
+
+  <div class="terminal panel">
+    <div class="terminal-bar">
+      <span></span>
+      <span></span>
+      <span></span>
+      <strong>local proxy session</strong>
+    </div>
+    <pre>{site.heroTerminal.join("\n")}</pre>
+  </div>
+</section>
+
+<style>
+  .hero {
+    display: grid;
+    grid-template-columns: minmax(0, 1.1fr) minmax(320px, 0.9fr);
+    align-items: center;
+    gap: 36px;
+    min-height: calc(100vh - 120px);
+    padding-top: 54px;
+  }
+
+  h1 {
+    margin: 18px 0 16px;
+    font-family: var(--display);
+    font-size: clamp(3rem, 8vw, 5.8rem);
+    line-height: 0.95;
+    letter-spacing: -0.04em;
+  }
+
+  p {
+    margin: 0;
+    max-width: 650px;
+    color: var(--muted);
+    font-size: 1.08rem;
+    line-height: 1.8;
+  }
+
+  .actions,
+  .meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 14px;
+  }
+
+  .actions {
+    margin-top: 28px;
+  }
+
+  .meta {
+    margin-top: 18px;
+  }
+
+  .primary,
+  .secondary {
+    padding: 14px 18px;
+    border-radius: 16px;
+    font-weight: 600;
+  }
+
+  .primary {
+    color: #160e09;
+    background: linear-gradient(135deg, var(--accent), #ffbd87);
+  }
+
+  .secondary {
+    border: 1px solid var(--line-strong);
+    color: var(--text);
+    background: rgba(255, 255, 255, 0.03);
+  }
+
+  .terminal {
+    overflow: hidden;
+  }
+
+  .terminal-bar {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 14px 16px;
+    border-bottom: 1px solid var(--line);
+    color: var(--muted);
+    font-family: var(--mono);
+    font-size: 0.82rem;
+  }
+
+  .terminal-bar span {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    background: rgba(255, 255, 255, 0.18);
+  }
+
+  .terminal-bar span:first-child {
+    background: #ff7b63;
+  }
+
+  .terminal-bar span:nth-child(2) {
+    background: #ffcb6b;
+  }
+
+  .terminal-bar span:nth-child(3) {
+    background: #52d67b;
+  }
+
+  pre {
+    margin: 0;
+    padding: 22px;
+    min-height: 360px;
+    overflow: auto;
+    color: #d9e7f8;
+    font-family: var(--mono);
+    font-size: 0.92rem;
+    line-height: 1.9;
+  }
+
+  @media (max-width: 900px) {
+    .hero {
+      grid-template-columns: 1fr;
+      min-height: auto;
+      padding-top: 24px;
+    }
+  }
+</style>

@@ -1,0 +1,97 @@
+---
+import { site } from "../data/site";
+---
+
+<section id="build" class="shell section">
+  <span class="eyebrow">Build and usage</span>
+  <h2 class="section-title">Real commands from the current CLI contract.</h2>
+  <p class="section-copy">
+    The landing keeps examples grounded in the repository today: cargo entrypoints for auth,
+    backend model listing, normal wrapper launch, and standalone proxy mode.
+  </p>
+
+  <div class="columns">
+    <article class="panel stack">
+      <h3>Build the project</h3>
+      <ul>
+        {
+          site.buildSteps.map((step) => (
+            <li>
+              <span>{step.label}</span>
+              <code>{step.command}</code>
+            </li>
+          ))
+        }
+      </ul>
+    </article>
+
+    <article class="panel stack">
+      <h3>Use the wrapper</h3>
+      <ul class="commands">
+        {
+          site.usageCommands.map((command) => (
+            <li>
+              <code>{command}</code>
+            </li>
+          ))
+        }
+      </ul>
+    </article>
+  </div>
+</section>
+
+<style>
+  .columns {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 18px;
+    margin-top: 28px;
+  }
+
+  .stack {
+    padding: 24px;
+  }
+
+  h3 {
+    margin: 0 0 18px;
+    font-family: var(--display);
+    font-size: 1.35rem;
+  }
+
+  ul {
+    display: grid;
+    gap: 14px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  li {
+    display: flex;
+    justify-content: space-between;
+    gap: 16px;
+    padding: 14px;
+    border: 1px solid var(--line);
+    border-radius: 14px;
+    background: rgba(255, 255, 255, 0.02);
+  }
+
+  code {
+    font-family: var(--mono);
+    color: var(--accent-soft);
+  }
+
+  .commands li {
+    justify-content: flex-start;
+  }
+
+  @media (max-width: 820px) {
+    .columns {
+      grid-template-columns: 1fr;
+    }
+
+    li {
+      flex-direction: column;
+    }
+  }
+</style>

@@ -1,0 +1,65 @@
+---
+import { site } from "../data/site";
+---
+
+<footer class="shell section footer">
+  <div class="panel inner">
+    <div>
+      <span class="eyebrow">Ship the wrapper, keep the interface</span>
+      <h2>Explore the repo, specs, and deployment-ready landing source.</h2>
+    </div>
+
+    <div class="links">
+      {
+        site.footerLinks.map((link) => (
+          <a href={link.href} target="_blank" rel="noreferrer">{link.label}</a>
+        ))
+      }
+    </div>
+  </div>
+</footer>
+
+<style>
+  .footer {
+    padding-bottom: 72px;
+  }
+
+  .inner {
+    display: flex;
+    justify-content: space-between;
+    gap: 24px;
+    padding: 28px;
+  }
+
+  h2 {
+    margin: 18px 0 0;
+    max-width: 640px;
+    font-family: var(--display);
+    font-size: clamp(1.8rem, 4vw, 3rem);
+    line-height: 1.05;
+  }
+
+  .links {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    min-width: 180px;
+  }
+
+  .links a {
+    padding: 12px 14px;
+    border: 1px solid var(--line);
+    border-radius: 14px;
+    color: var(--muted);
+  }
+
+  @media (max-width: 840px) {
+    .inner {
+      flex-direction: column;
+    }
+
+    .links {
+      min-width: 0;
+    }
+  }
+</style>

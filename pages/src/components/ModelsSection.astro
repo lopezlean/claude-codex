@@ -1,0 +1,89 @@
+---
+import { site } from "../data/site";
+---
+
+<section id="models" class="shell section">
+  <span class="eyebrow">Backend-aware models</span>
+  <h2 class="section-title">Defaults change with the session type.</h2>
+  <p class="section-copy">
+    `models list` reflects the active backend catalog, and launch-time validation prevents
+    unsupported model IDs from reaching the `claude` process.
+  </p>
+
+  <div class="groups">
+    {
+      site.modelGroups.map((group) => (
+        <article class="panel group">
+          <div class="group-head">
+            <div>
+              <h3>{group.name}</h3>
+              <p>{group.detail}</p>
+            </div>
+            <span class="pill">Default: {group.defaultModel}</span>
+          </div>
+
+          <div class="tags">
+            {
+              group.models.map((model) => (
+                <code>{model}</code>
+              ))
+            }
+          </div>
+        </article>
+      ))
+    }
+  </div>
+</section>
+
+<style>
+  .groups {
+    display: grid;
+    gap: 18px;
+    margin-top: 28px;
+  }
+
+  .group {
+    padding: 24px;
+  }
+
+  .group-head {
+    display: flex;
+    justify-content: space-between;
+    gap: 20px;
+    align-items: start;
+  }
+
+  h3 {
+    margin: 0 0 8px;
+    font-family: var(--display);
+    font-size: 1.4rem;
+  }
+
+  p {
+    margin: 0;
+    color: var(--muted);
+    line-height: 1.7;
+  }
+
+  .tags {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px;
+    margin-top: 20px;
+  }
+
+  .tags code {
+    padding: 12px 14px;
+    border-radius: 14px;
+    border: 1px solid var(--line);
+    color: var(--accent-soft);
+    font-family: var(--mono);
+    background: rgba(255, 255, 255, 0.02);
+  }
+
+  @media (max-width: 780px) {
+    .group-head {
+      flex-direction: column;
+    }
+  }
+</style>
