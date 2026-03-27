@@ -21,10 +21,11 @@ use crate::cli::{AuthCommand, ModelsCommand, ParsedCli};
 use crate::config::AppConfig;
 use crate::error::AppError;
 use crate::models::{
-    available_models_for, backend_kind_for_token, default_model_for, resolve_model,
+    available_models_for, backend_kind_for_token, default_effort, default_model_for,
+    resolve_effort, resolve_model,
 };
 use crate::process::{
-    reserve_local_port, spawn_claude, split_model_arg, terminate_claude, wait_for_claude,
+    reserve_local_port, spawn_claude, split_wrapper_args, terminate_claude, wait_for_claude,
 };
 use crate::server::{serve, wait_until_ready, AppState};
 use tokio::task::JoinHandle;
@@ -63,10 +64,15 @@ async fn run() -> Result<(), AppError> {
         ParsedCli::Run { claude_args } => {
             let access_token = auth.ensure_access_token().await?;
             let backend_kind = backend_kind_for_token(&access_token)?;
-            let (extra_args, requested_model) = split_model_arg(&claude_args);
+            let (extra_args, requested_model, requested_effort) = split_wrapper_args(&claude_args);
             let backend_model = resolve_model(backend_kind, requested_model.as_deref())?;
+            let effort = resolve_effort(backend_kind, requested_effort.as_deref())?;
             let port = reserve_local_port()?;
-            let state = AppState { auth, backend };
+            let state = AppState {
+                auth,
+                backend,
+                effort,
+            };
             let server_task: JoinHandle<anyhow::Result<()>> = tokio::spawn(serve(state, port));
             if let Err(error) = wait_until_ready(port).await {
                 server_task.abort();
@@ -120,7 +126,11 @@ async fn run() -> Result<(), AppError> {
         }
         ParsedCli::ProxyServe => {
             let port = reserve_local_port()?;
-            let state = AppState { auth, backend };
+            let state = AppState {
+                auth,
+                backend,
+                effort: default_effort(),
+            };
             serve(state, port).await?;
             Ok(())
         }

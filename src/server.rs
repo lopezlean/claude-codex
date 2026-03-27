@@ -9,6 +9,7 @@ use axum::{
 use crate::auth::provider::AuthProvider;
 use crate::backend::provider::BackendProvider;
 use crate::handlers::{count_tokens::count_tokens, health::health, messages::create_message};
+use crate::models::EffortLevel;
 #[cfg(test)]
 use crate::{
     auth::{
@@ -22,6 +23,7 @@ use crate::{
 pub struct AppState {
     pub auth: Arc<dyn AuthProvider>,
     pub backend: Arc<dyn BackendProvider>,
+    pub effort: EffortLevel,
 }
 
 impl AppState {
@@ -40,6 +42,7 @@ impl AppState {
                 store,
             )),
             backend: Arc::new(OpenAiBackendProvider::new(backend)),
+            effort: crate::models::default_effort(),
         }
     }
 }

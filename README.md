@@ -69,6 +69,12 @@ Run Claude Code through the wrapper:
 cargo run -- --print hello
 ```
 
+Choose a Codex reasoning effort explicitly:
+
+```bash
+cargo run -- --effort low --print hello
+```
+
 Start only the local proxy:
 
 ```bash
@@ -104,7 +110,15 @@ Model handling is backend-aware.
 - For Codex-backed OAuth/JWT sessions, the launcher defaults to `gpt-5.4`.
 - For Chat Completions API-key sessions, the launcher defaults to `gpt-4o`.
 - If you pass `--model`, `claude-codex` validates it against the active backend catalog before launching `claude`.
+- If you pass `--effort`, `claude-codex` validates it against the active backend before launching `claude`.
 - `cargo run -- models list` prints the supported models for the active backend and marks the default.
+
+Current effort behavior:
+
+- `--effort` is supported only for Codex-backed OAuth/JWT sessions.
+- Supported values are `low`, `medium`, and `high`.
+- If omitted, Codex requests default to `medium`.
+- Chat Completions sessions do not emulate effort levels and fail early if `--effort` is provided.
 
 Current Codex catalog:
 

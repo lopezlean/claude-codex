@@ -52,6 +52,9 @@ Model selection is backend-aware:
 - Chat Completions sessions default to `gpt-4o`
 - `cargo run -- models list` prints the active backend catalog
 - unsupported models must fail before `claude` is launched
+- `--effort low|medium|high` is a wrapper-owned Codex-only flag
+- Codex sessions default effort to `medium`
+- Chat Completions sessions must reject explicit `--effort`
 
 ## Working Conventions
 

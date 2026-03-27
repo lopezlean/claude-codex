@@ -7,6 +7,7 @@ use reqwest::Client;
 use serde_json::Value;
 
 use crate::backend::provider::{BackendProvider, UpstreamResponse, UpstreamStream};
+use crate::models::EffortLevel;
 use crate::protocol::codex::{build_codex_request, CodexSseToOpenAiBridge};
 use crate::protocol::openai::OpenAiChatRequest;
 
@@ -70,9 +71,10 @@ impl OpenAiBackendProvider {
         &self,
         access_token: &str,
         request: &OpenAiChatRequest,
+        effort: EffortLevel,
     ) -> Result<UpstreamResponse> {
         let response = self
-            .build_codex_request(access_token, request)
+            .build_codex_request(access_token, request, effort)
             .send()
             .await
             .context("failed to call the Codex Responses API")?;
@@ -102,9 +104,10 @@ impl OpenAiBackendProvider {
         &self,
         access_token: &str,
         request: &OpenAiChatRequest,
+        effort: EffortLevel,
     ) -> Result<UpstreamStream> {
         let response = self
-            .build_codex_request(access_token, request)
+            .build_codex_request(access_token, request, effort)
             .send()
             .await
             .context("failed to call the Codex Responses API")?
@@ -122,6 +125,7 @@ impl OpenAiBackendProvider {
         &self,
         access_token: &str,
         request: &OpenAiChatRequest,
+        effort: EffortLevel,
     ) -> reqwest::RequestBuilder {
         let mut builder = self
             .client
@@ -131,7 +135,7 @@ impl OpenAiBackendProvider {
             .header("originator", RESPONSES_ORIGINATOR)
             .header("User-Agent", RESPONSES_USER_AGENT)
             .header("accept", "text/event-stream")
-            .json(&build_codex_request(request));
+            .json(&build_codex_request(request, effort.into()));
 
         if let Some(account_id) = extract_account_id(access_token) {
             builder = builder.header("chatgpt-account-id", account_id);
@@ -155,9 +159,11 @@ impl BackendProvider for OpenAiBackendProvider {
         &self,
         access_token: &str,
         request: &OpenAiChatRequest,
+        effort: EffortLevel,
     ) -> Result<UpstreamResponse> {
         if Self::should_use_codex(access_token) {
-            self.send_codex_non_stream(access_token, request).await
+            self.send_codex_non_stream(access_token, request, effort)
+                .await
         } else {
             self.send_chat_completions(access_token, request).await
         }
@@ -167,9 +173,10 @@ impl BackendProvider for OpenAiBackendProvider {
         &self,
         access_token: &str,
         request: &OpenAiChatRequest,
+        effort: EffortLevel,
     ) -> Result<UpstreamStream> {
         if Self::should_use_codex(access_token) {
-            self.send_codex_stream(access_token, request).await
+            self.send_codex_stream(access_token, request, effort).await
         } else {
             let response = self
                 .client
@@ -187,6 +194,16 @@ impl BackendProvider for OpenAiBackendProvider {
                     .bytes_stream()
                     .map(|chunk| chunk.map_err(anyhow::Error::from)),
             ))
+        }
+    }
+}
+
+impl From<EffortLevel> for crate::protocol::codex::CodexEffortLevel {
+    fn from(value: EffortLevel) -> Self {
+        match value {
+            EffortLevel::Low => Self::Low,
+            EffortLevel::Medium => Self::Medium,
+            EffortLevel::High => Self::High,
         }
     }
 }
@@ -210,6 +227,7 @@ mod tests {
 
     use super::{OpenAiBackendConfig, OpenAiBackendProvider};
     use crate::backend::provider::BackendProvider;
+    use crate::models::EffortLevel;
     use crate::protocol::openai::{
         OpenAiChatMessage, OpenAiChatRequest, OpenAiToolDefinition, OpenAiToolFunction,
     };
@@ -239,6 +257,7 @@ mod tests {
             .send_chat(
                 "eyJhbGciOiJub25lIn0.eyJodHRwczovL2FwaS5vcGVuYWkuY29tL2F1dGgiOnsia2V5IjoidmFsdWUifX0.",
                 &sample_request("gpt-4o"),
+                EffortLevel::Medium,
             )
             .await
             .expect("oauth requests should use codex");
@@ -274,7 +293,7 @@ mod tests {
             codex_responses_url: format!("{}/backend-api/codex/responses", upstream.uri()),
         });
         let response = provider
-            .send_chat("sk-test", &sample_request("gpt-4o"))
+            .send_chat("sk-test", &sample_request("gpt-4o"), EffortLevel::Medium)
             .await
             .expect("api key requests should keep chat completions");
 
@@ -304,7 +323,11 @@ mod tests {
             codex_responses_url: format!("{}/backend-api/codex/responses", upstream.uri()),
         });
         let mut stream = provider
-            .send_chat_stream("ey.token.value", &sample_request("gpt-4o"))
+            .send_chat_stream(
+                "ey.token.value",
+                &sample_request("gpt-4o"),
+                EffortLevel::Medium,
+            )
             .await
             .expect("oauth stream should use codex");
 

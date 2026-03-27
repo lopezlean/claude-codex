@@ -46,9 +46,10 @@ pub fn spawn_claude(
         })
 }
 
-pub fn split_model_arg(args: &[OsString]) -> (Vec<OsString>, Option<String>) {
+pub fn split_wrapper_args(args: &[OsString]) -> (Vec<OsString>, Option<String>, Option<String>) {
     let mut forwarded_args = Vec::new();
     let mut selected_model = None;
+    let mut selected_effort = None;
     let mut index = 0;
 
     while index < args.len() {
@@ -72,11 +73,25 @@ pub fn split_model_arg(args: &[OsString]) -> (Vec<OsString>, Option<String>) {
             continue;
         }
 
+        if let Some(effort) = raw.strip_prefix("--effort=") {
+            selected_effort = Some(effort.to_string());
+            index += 1;
+            continue;
+        }
+
+        if raw == "--effort" {
+            selected_effort = args
+                .get(index + 1)
+                .map(|value| value.to_string_lossy().into_owned());
+            index += usize::from(args.get(index + 1).is_some()) + 1;
+            continue;
+        }
+
         forwarded_args.push(args[index].clone());
         index += 1;
     }
 
-    (forwarded_args, selected_model)
+    (forwarded_args, selected_model, selected_effort)
 }
 
 fn build_claude_args(model: &str, extra_args: &[OsString]) -> Vec<OsString> {
@@ -181,4 +196,50 @@ pub async fn terminate_claude(child: &mut Child) -> Result<(), AppError> {
 
     let _ = child.wait().await;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::ffi::OsString;
+
+    use super::split_wrapper_args;
+
+    #[test]
+    fn split_wrapper_args_extracts_model_and_effort_flags() {
+        let args = vec![
+            OsString::from("--model"),
+            OsString::from("gpt-5.4-mini"),
+            OsString::from("--effort"),
+            OsString::from("low"),
+            OsString::from("--print"),
+            OsString::from("hello"),
+        ];
+
+        let (forwarded, model, effort) = split_wrapper_args(&args);
+
+        assert_eq!(
+            forwarded,
+            vec![OsString::from("--print"), OsString::from("hello")]
+        );
+        assert_eq!(model.as_deref(), Some("gpt-5.4-mini"));
+        assert_eq!(effort.as_deref(), Some("low"));
+    }
+
+    #[test]
+    fn split_wrapper_args_extracts_inline_effort_flag() {
+        let args = vec![
+            OsString::from("--effort=high"),
+            OsString::from("--print"),
+            OsString::from("hello"),
+        ];
+
+        let (forwarded, model, effort) = split_wrapper_args(&args);
+
+        assert_eq!(
+            forwarded,
+            vec![OsString::from("--print"), OsString::from("hello")]
+        );
+        assert_eq!(model, None);
+        assert_eq!(effort.as_deref(), Some("high"));
+    }
 }

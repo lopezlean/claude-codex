@@ -4,6 +4,14 @@ use serde_json::{json, Value};
 
 use crate::protocol::openai::{OpenAiChatMessage, OpenAiChatRequest, OpenAiToolChoice};
 
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum CodexEffortLevel {
+    Low,
+    Medium,
+    High,
+}
+
 #[derive(Debug, Clone, Serialize, PartialEq)]
 pub struct CodexResponsesRequest {
     pub model: String,
@@ -11,6 +19,7 @@ pub struct CodexResponsesRequest {
     pub stream: bool,
     pub instructions: String,
     pub input: Vec<CodexInputMessage>,
+    pub reasoning: CodexReasoningOptions,
     pub text: CodexTextOptions,
     pub include: Vec<String>,
     pub tool_choice: String,
@@ -22,6 +31,11 @@ pub struct CodexResponsesRequest {
 #[derive(Debug, Clone, Serialize, PartialEq)]
 pub struct CodexTextOptions {
     pub verbosity: String,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct CodexReasoningOptions {
+    pub effort: CodexEffortLevel,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
@@ -40,7 +54,10 @@ pub struct CodexToolDecl {
     pub parameters: Value,
 }
 
-pub fn build_codex_request(request: &OpenAiChatRequest) -> CodexResponsesRequest {
+pub fn build_codex_request(
+    request: &OpenAiChatRequest,
+    effort: CodexEffortLevel,
+) -> CodexResponsesRequest {
     let mut instructions = Vec::new();
     let mut input = Vec::new();
 
@@ -113,6 +130,7 @@ pub fn build_codex_request(request: &OpenAiChatRequest) -> CodexResponsesRequest
         stream: true,
         instructions: instructions.join("\n\n"),
         input,
+        reasoning: CodexReasoningOptions { effort },
         text: CodexTextOptions {
             verbosity: "medium".to_string(),
         },
@@ -352,7 +370,7 @@ fn format_openai_stream_delta(delta: Value) -> String {
 mod tests {
     use serde_json::json;
 
-    use super::{build_codex_request, CodexSseToOpenAiBridge};
+    use super::{build_codex_request, CodexEffortLevel, CodexSseToOpenAiBridge};
     use crate::protocol::openai::{
         OpenAiChatMessage, OpenAiChatRequest, OpenAiToolChoice, OpenAiToolDefinition,
         OpenAiToolFunction,
@@ -389,12 +407,43 @@ mod tests {
             max_tokens: Some(128),
         };
 
-        let built = build_codex_request(&request);
+        let built = build_codex_request(&request, CodexEffortLevel::Medium);
         assert_eq!(built.model, "gpt-4o");
         assert_eq!(built.instructions, "You are concise.");
         assert_eq!(built.input.len(), 1);
         assert_eq!(built.input[0].role, "user");
         assert_eq!(built.tools[0].name, "lookup_weather");
+        assert_eq!(built.reasoning.effort, CodexEffortLevel::Medium);
+    }
+
+    #[test]
+    fn builds_codex_requests_with_low_effort() {
+        let request = OpenAiChatRequest {
+            model: "gpt-5.4".to_string(),
+            messages: vec![],
+            tools: vec![],
+            tool_choice: None,
+            stream: false,
+            max_tokens: None,
+        };
+
+        let built = build_codex_request(&request, CodexEffortLevel::Low);
+        assert_eq!(built.reasoning.effort, CodexEffortLevel::Low);
+    }
+
+    #[test]
+    fn builds_codex_requests_with_high_effort() {
+        let request = OpenAiChatRequest {
+            model: "gpt-5.4".to_string(),
+            messages: vec![],
+            tools: vec![],
+            tool_choice: None,
+            stream: false,
+            max_tokens: None,
+        };
+
+        let built = build_codex_request(&request, CodexEffortLevel::High);
+        assert_eq!(built.reasoning.effort, CodexEffortLevel::High);
     }
 
     #[test]

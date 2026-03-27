@@ -137,6 +137,24 @@ mod tests {
     }
 
     #[test]
+    fn treats_effort_flag_as_a_run_mode_argument() {
+        let parsed = parse(["claude-codex", "--effort", "low", "--print", "hello"])
+            .expect("run mode with effort");
+
+        assert_eq!(
+            parsed,
+            ParsedCli::Run {
+                claude_args: vec![
+                    "--effort".into(),
+                    "low".into(),
+                    "--print".into(),
+                    "hello".into()
+                ],
+            }
+        );
+    }
+
+    #[test]
     fn parses_proxy_serve_command() {
         let parsed = parse(["claude-codex", "proxy", "serve"]).expect("proxy serve should parse");
         assert_eq!(parsed, ParsedCli::ProxyServe);

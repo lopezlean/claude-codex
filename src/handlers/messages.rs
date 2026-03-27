@@ -25,7 +25,7 @@ pub async fn create_message(
         let mut translator = OpenAiSseTranslator::default();
         let stream = state
             .backend
-            .send_chat_stream(&access_token, &mapped)
+            .send_chat_stream(&access_token, &mapped, state.effort)
             .await
             .map_err(internal_error)?
             .map(move |chunk| {
@@ -41,7 +41,7 @@ pub async fn create_message(
 
     let upstream = state
         .backend
-        .send_chat(&access_token, &mapped)
+        .send_chat(&access_token, &mapped, state.effort)
         .await
         .map_err(internal_error)?;
     if !upstream.status.is_success() {

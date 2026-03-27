@@ -171,6 +171,93 @@ fn run_mode_defaults_all_model_tiers_to_default_backend_model() {
     assert!(captured.contains("ARGS=--model gpt-5.4"));
 }
 
+#[test]
+fn run_mode_consumes_effort_without_forwarding_it_to_claude() {
+    let dir = tempdir().expect("temp dir");
+    let bin_dir = dir.path().join("bin");
+    let home_dir = dir.path().join("home");
+    let capture_path = dir.path().join("capture.txt");
+    fs::create_dir_all(&bin_dir).expect("bin dir");
+    fs::create_dir_all(home_dir.join(".codex")).expect("auth dir");
+    fs::write(
+        home_dir.join(".codex").join("auth.json"),
+        json!({
+            "auth_mode": "openai",
+            "tokens": {
+                "access_token": "ey.test.token"
+            },
+            "last_refresh": "123"
+        })
+        .to_string(),
+    )
+    .expect("auth file");
+
+    let script = format!(
+        "#!/bin/sh\nprintf 'ARGS=%s\\n' \"$*\" > \"{}\"\n",
+        capture_path.display()
+    );
+    let claude_path = bin_dir.join("claude");
+    fs::write(&claude_path, script).expect("script");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = fs::metadata(&claude_path).unwrap().permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(&claude_path, perms).unwrap();
+    }
+
+    Command::cargo_bin("claude-codex")
+        .expect("binary")
+        .env("HOME", &home_dir)
+        .env(
+            "PATH",
+            format!("{}:{}", bin_dir.display(), std::env::var("PATH").unwrap()),
+        )
+        .arg("--effort")
+        .arg("low")
+        .arg("--print")
+        .arg("hello")
+        .assert()
+        .success();
+
+    let captured = fs::read_to_string(capture_path).expect("capture");
+    assert!(captured.contains("ARGS=--model gpt-5.4 --print hello"));
+    assert!(!captured.contains("--effort"));
+}
+
+#[test]
+fn run_mode_rejects_effort_for_chat_completions_sessions() {
+    let dir = tempdir().expect("temp dir");
+    let bin_dir = dir.path().join("bin");
+    let home_dir = dir.path().join("home");
+    fs::create_dir_all(&bin_dir).expect("bin dir");
+    fs::create_dir_all(home_dir.join(".codex")).expect("auth dir");
+    fs::write(
+        home_dir.join(".codex").join("auth.json"),
+        json!({
+            "auth_mode": "openai",
+            "tokens": {
+                "access_token": "sk-test"
+            },
+            "last_refresh": "123"
+        })
+        .to_string(),
+    )
+    .expect("auth file");
+
+    Command::cargo_bin("claude-codex")
+        .expect("binary")
+        .env("HOME", &home_dir)
+        .env("PATH", &bin_dir)
+        .arg("--effort")
+        .arg("high")
+        .assert()
+        .failure()
+        .stderr(predicates::str::contains(
+            "--effort is only supported on the codex backend",
+        ));
+}
+
 #[cfg(unix)]
 #[test]
 fn run_mode_stops_the_child_when_the_wrapper_is_interrupted() {

@@ -1,6 +1,7 @@
 use anyhow::Result;
 use futures_core::Stream;
 
+use crate::models::EffortLevel;
 use crate::protocol::openai::OpenAiChatRequest;
 
 pub struct UpstreamResponse {
@@ -16,11 +17,13 @@ pub trait BackendProvider: Send + Sync {
         &self,
         access_token: &str,
         request: &OpenAiChatRequest,
+        effort: EffortLevel,
     ) -> Result<UpstreamResponse>;
 
     async fn send_chat_stream(
         &self,
         access_token: &str,
         request: &OpenAiChatRequest,
+        effort: EffortLevel,
     ) -> Result<UpstreamStream>;
 }
