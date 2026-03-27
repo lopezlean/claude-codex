@@ -1,5 +1,5 @@
 use axum::body::Body;
-use axum::http::{header, StatusCode};
+use axum::http::{header, HeaderMap, HeaderName, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::{extract::State, Json};
 use bytes::Bytes;
@@ -23,19 +23,24 @@ pub async fn create_message(
 
     if request.stream {
         let mut translator = OpenAiSseTranslator::default();
-        let stream = state
+        let upstream = state
             .backend
             .send_chat_stream(&access_token, &mapped, state.effort)
             .await
-            .map_err(internal_error)?
-            .map(move |chunk| {
-                let bytes = chunk?;
-                let translated = translator.push_bytes(&bytes)?;
-                Ok::<Bytes, anyhow::Error>(Bytes::from(translated))
-            });
+            .map_err(internal_error)?;
+        let stream = upstream.stream.map(move |chunk| {
+            let bytes = chunk?;
+            let translated = translator.push_bytes(&bytes)?;
+            Ok::<Bytes, anyhow::Error>(Bytes::from(translated))
+        });
 
         let body = Body::from_stream(stream);
-        let response = ([(header::CONTENT_TYPE, "text/event-stream")], body).into_response();
+        let mut response = body.into_response();
+        response.headers_mut().insert(
+            header::CONTENT_TYPE,
+            HeaderValue::from_static("text/event-stream"),
+        );
+        append_upstream_headers(response.headers_mut(), &upstream.headers)?;
         return Ok(response);
     }
 
@@ -51,10 +56,24 @@ pub async fn create_message(
     let body =
         map_openai_to_anthropic_response(&request.model, &upstream.body).map_err(internal_error)?;
 
-    Ok(axum::Json(body).into_response())
+    let mut response = axum::Json(body).into_response();
+    append_upstream_headers(response.headers_mut(), &upstream.headers)?;
+    Ok(response)
 }
 
 fn internal_error(error: impl std::fmt::Display) -> (StatusCode, String) {
     tracing::error!("proxy request failed: {error}");
     (StatusCode::BAD_GATEWAY, error.to_string())
+}
+
+fn append_upstream_headers(
+    headers: &mut HeaderMap,
+    upstream_headers: &crate::backend::provider::UpstreamHeaders,
+) -> Result<(), (StatusCode, String)> {
+    for (name, value) in &upstream_headers.entries {
+        let header_name = HeaderName::try_from(name.as_str()).map_err(internal_error)?;
+        let header_value = HeaderValue::try_from(value.as_str()).map_err(internal_error)?;
+        headers.insert(header_name, header_value);
+    }
+    Ok(())
 }

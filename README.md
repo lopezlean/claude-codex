@@ -138,6 +138,13 @@ Current Codex optimization behavior:
 - Older tool-result messages are capped to 600 characters.
 - If the estimated prompt still exceeds the budget, the oldest non-system messages are dropped.
 - Chat Completions requests do not use this optimization pass.
+- Codex responses include optimization metrics in response headers:
+  - `x-claude-codex-prompt-tokens-before`
+  - `x-claude-codex-prompt-tokens-after`
+  - `x-claude-codex-trimmed-messages`
+  - `x-claude-codex-dropped-messages`
+  - `x-claude-codex-trimmed-text-messages`
+  - `x-claude-codex-trimmed-tool-results`
 
 Current Codex catalog:
 

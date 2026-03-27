@@ -2,6 +2,7 @@ use anyhow::{bail, Result};
 use serde::Serialize;
 use serde_json::{json, Value};
 
+use crate::backend::provider::CodexPromptMetrics;
 use crate::protocol::openai::{OpenAiChatMessage, OpenAiChatRequest, OpenAiToolChoice};
 
 const DEFAULT_CODEX_PROMPT_BUDGET: usize = 12_000;
@@ -61,15 +62,27 @@ pub struct CodexToolDecl {
     pub parameters: Value,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct OptimizedCodexRequest {
+    pub request: OpenAiChatRequest,
+    pub metrics: CodexPromptMetrics,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct CodexBuildResult {
+    pub request: CodexResponsesRequest,
+    pub metrics: CodexPromptMetrics,
+}
+
 pub fn build_codex_request(
     request: &OpenAiChatRequest,
     effort: CodexEffortLevel,
-) -> CodexResponsesRequest {
+) -> CodexBuildResult {
     let optimized = optimize_codex_request(request);
     let mut instructions = Vec::new();
     let mut input = Vec::new();
 
-    for message in &optimized.messages {
+    for message in &optimized.request.messages {
         match message.role.as_str() {
             "system" => {
                 if let Some(content) = message
@@ -122,6 +135,7 @@ pub fn build_codex_request(
     }
 
     let tools = optimized
+        .request
         .tools
         .iter()
         .map(|tool| CodexToolDecl {
@@ -132,25 +146,29 @@ pub fn build_codex_request(
         })
         .collect();
 
-    CodexResponsesRequest {
-        model: optimized.model.clone(),
-        store: false,
-        stream: optimized.stream,
-        instructions: instructions.join("\n\n"),
-        input,
-        reasoning: CodexReasoningOptions { effort },
-        text: CodexTextOptions {
-            verbosity: "low".to_string(),
+    CodexBuildResult {
+        request: CodexResponsesRequest {
+            model: optimized.request.model.clone(),
+            store: false,
+            stream: optimized.request.stream,
+            instructions: instructions.join("\n\n"),
+            input,
+            reasoning: CodexReasoningOptions { effort },
+            text: CodexTextOptions {
+                verbosity: "low".to_string(),
+            },
+            include: vec!["reasoning.encrypted_content".to_string()],
+            tool_choice: map_tool_choice(optimized.request.tool_choice.as_ref()),
+            parallel_tool_calls: true,
+            tools,
         },
-        include: vec!["reasoning.encrypted_content".to_string()],
-        tool_choice: map_tool_choice(optimized.tool_choice.as_ref()),
-        parallel_tool_calls: true,
-        tools,
+        metrics: optimized.metrics,
     }
 }
 
-fn optimize_codex_request(request: &OpenAiChatRequest) -> OpenAiChatRequest {
+fn optimize_codex_request(request: &OpenAiChatRequest) -> OptimizedCodexRequest {
     let mut optimized = request.clone();
+    let estimated_prompt_tokens_before = estimate_codex_prompt_tokens(&optimized);
     let system_indices = optimized
         .messages
         .iter()
@@ -165,18 +183,48 @@ fn optimize_codex_request(request: &OpenAiChatRequest) -> OpenAiChatRequest {
         .collect::<Vec<_>>();
 
     if non_system_indices.len() <= DEFAULT_PRESERVED_RECENT_MESSAGES {
-        return optimized;
+        return OptimizedCodexRequest {
+            request: optimized,
+            metrics: CodexPromptMetrics {
+                estimated_prompt_tokens_before,
+                estimated_prompt_tokens_after: estimated_prompt_tokens_before,
+                trimmed_message_count: 0,
+                dropped_message_count: 0,
+                trimmed_text_messages: 0,
+                trimmed_tool_result_messages: 0,
+            },
+        };
     }
 
     let preserved_start = non_system_indices.len() - DEFAULT_PRESERVED_RECENT_MESSAGES;
     let trimmable_indices = &non_system_indices[..preserved_start];
+    let mut trimmed_message_count = 0;
+    let mut trimmed_text_messages = 0;
+    let mut trimmed_tool_result_messages = 0;
 
     for &index in trimmable_indices {
-        trim_message(&mut optimized.messages[index]);
+        if let Some(trimmed_kind) = trim_message(&mut optimized.messages[index]) {
+            trimmed_message_count += 1;
+            match trimmed_kind {
+                TrimmedMessageKind::Text => trimmed_text_messages += 1,
+                TrimmedMessageKind::ToolResult => trimmed_tool_result_messages += 1,
+            }
+        }
     }
 
     if estimate_codex_prompt_tokens(&optimized) <= DEFAULT_CODEX_PROMPT_BUDGET {
-        return optimized;
+        let estimated_prompt_tokens_after = estimate_codex_prompt_tokens(&optimized);
+        return OptimizedCodexRequest {
+            request: optimized,
+            metrics: CodexPromptMetrics {
+                estimated_prompt_tokens_before,
+                estimated_prompt_tokens_after,
+                trimmed_message_count,
+                dropped_message_count: 0,
+                trimmed_text_messages,
+                trimmed_tool_result_messages,
+            },
+        };
     }
 
     let mut keep_flags = vec![true; optimized.messages.len()];
@@ -184,6 +232,7 @@ fn optimize_codex_request(request: &OpenAiChatRequest) -> OpenAiChatRequest {
         keep_flags[index] = true;
     }
 
+    let mut dropped_message_count = 0;
     for &index in trimmable_indices {
         if estimate_codex_prompt_tokens_with_flags(&optimized, &keep_flags)
             <= DEFAULT_CODEX_PROMPT_BUDGET
@@ -191,6 +240,7 @@ fn optimize_codex_request(request: &OpenAiChatRequest) -> OpenAiChatRequest {
             break;
         }
         keep_flags[index] = false;
+        dropped_message_count += 1;
     }
 
     optimized.messages = optimized
@@ -199,10 +249,27 @@ fn optimize_codex_request(request: &OpenAiChatRequest) -> OpenAiChatRequest {
         .enumerate()
         .filter_map(|(index, message)| keep_flags[index].then_some(message))
         .collect();
-    optimized
+    let estimated_prompt_tokens_after = estimate_codex_prompt_tokens(&optimized);
+    OptimizedCodexRequest {
+        request: optimized,
+        metrics: CodexPromptMetrics {
+            estimated_prompt_tokens_before,
+            estimated_prompt_tokens_after,
+            trimmed_message_count,
+            dropped_message_count,
+            trimmed_text_messages,
+            trimmed_tool_result_messages,
+        },
+    }
 }
 
-fn trim_message(message: &mut OpenAiChatMessage) {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TrimmedMessageKind {
+    Text,
+    ToolResult,
+}
+
+fn trim_message(message: &mut OpenAiChatMessage) -> Option<TrimmedMessageKind> {
     if let Some(content) = message.content.take() {
         let limit = if message.role == "tool" {
             DEFAULT_OLDER_TOOL_RESULT_CHAR_LIMIT
@@ -214,8 +281,18 @@ fn trim_message(message: &mut OpenAiChatMessage) {
         } else {
             TEXT_TRUNCATION_MARKER
         };
-        message.content = Some(truncate_content(&content, limit, marker));
+        let truncated = truncate_content(&content, limit, marker);
+        let trimmed = truncated != content;
+        message.content = Some(truncated);
+        if trimmed {
+            return Some(if message.role == "tool" {
+                TrimmedMessageKind::ToolResult
+            } else {
+                TrimmedMessageKind::Text
+            });
+        }
     }
+    None
 }
 
 fn truncate_content(content: &str, limit: usize, marker: &str) -> String {
@@ -565,13 +642,17 @@ mod tests {
         };
 
         let built = build_codex_request(&request, CodexEffortLevel::Medium);
-        assert_eq!(built.model, "gpt-4o");
-        assert_eq!(built.instructions, "You are concise.");
-        assert_eq!(built.input.len(), 1);
-        assert_eq!(built.input[0].role, "user");
-        assert_eq!(built.tools[0].name, "lookup_weather");
-        assert_eq!(built.reasoning.effort, CodexEffortLevel::Medium);
-        assert_eq!(built.text.verbosity, "low");
+        assert_eq!(built.request.model, "gpt-4o");
+        assert_eq!(built.request.instructions, "You are concise.");
+        assert_eq!(built.request.input.len(), 1);
+        assert_eq!(built.request.input[0].role, "user");
+        assert_eq!(built.request.tools[0].name, "lookup_weather");
+        assert_eq!(built.request.reasoning.effort, CodexEffortLevel::Medium);
+        assert_eq!(built.request.text.verbosity, "low");
+        assert_eq!(
+            built.metrics.estimated_prompt_tokens_before,
+            built.metrics.estimated_prompt_tokens_after
+        );
     }
 
     #[test]
@@ -586,7 +667,7 @@ mod tests {
         };
 
         let built = build_codex_request(&request, CodexEffortLevel::Low);
-        assert_eq!(built.reasoning.effort, CodexEffortLevel::Low);
+        assert_eq!(built.request.reasoning.effort, CodexEffortLevel::Low);
     }
 
     #[test]
@@ -601,7 +682,7 @@ mod tests {
         };
 
         let built = build_codex_request(&request, CodexEffortLevel::High);
-        assert_eq!(built.reasoning.effort, CodexEffortLevel::High);
+        assert_eq!(built.request.reasoning.effort, CodexEffortLevel::High);
     }
 
     #[test]
@@ -662,8 +743,8 @@ mod tests {
         let optimized = optimize_codex_request(&request);
         let original_recent =
             &request.messages[request.messages.len() - DEFAULT_PRESERVED_RECENT_MESSAGES..];
-        let optimized_recent =
-            &optimized.messages[optimized.messages.len() - DEFAULT_PRESERVED_RECENT_MESSAGES..];
+        let optimized_recent = &optimized.request.messages
+            [optimized.request.messages.len() - DEFAULT_PRESERVED_RECENT_MESSAGES..];
 
         assert_eq!(optimized_recent, original_recent);
     }
@@ -690,11 +771,12 @@ mod tests {
         };
 
         let optimized = optimize_codex_request(&request);
-        let first = optimized.messages.first().expect("first message");
+        let first = optimized.request.messages.first().expect("first message");
         let first_content = first.content.as_deref().expect("content");
 
         assert!(first_content.ends_with(TEXT_TRUNCATION_MARKER));
         assert_eq!(first_content.chars().count(), DEFAULT_OLDER_TEXT_CHAR_LIMIT);
+        assert_eq!(optimized.metrics.trimmed_text_messages, 2);
     }
 
     #[test]
@@ -723,7 +805,7 @@ mod tests {
         };
 
         let optimized = optimize_codex_request(&request);
-        let first_content = optimized.messages[0]
+        let first_content = optimized.request.messages[0]
             .content
             .as_deref()
             .expect("tool content");
@@ -733,6 +815,7 @@ mod tests {
             first_content.chars().count(),
             DEFAULT_OLDER_TOOL_RESULT_CHAR_LIMIT
         );
+        assert_eq!(optimized.metrics.trimmed_tool_result_messages, 1);
     }
 
     #[test]
@@ -766,18 +849,19 @@ mod tests {
         let optimized = optimize_codex_request(&request);
 
         assert_eq!(
-            optimized.messages[0].content.as_deref(),
+            optimized.request.messages[0].content.as_deref(),
             Some("keep me"),
             "system prompt should be preserved"
         );
         assert!(
-            optimized.messages.len() < request.messages.len(),
+            optimized.request.messages.len() < request.messages.len(),
             "older messages should have been dropped"
         );
         assert!(
-            optimized.messages.len() >= DEFAULT_PRESERVED_RECENT_MESSAGES + 1,
+            optimized.request.messages.len() >= DEFAULT_PRESERVED_RECENT_MESSAGES + 1,
             "newest preserved messages and system prompt should remain"
         );
+        assert!(optimized.metrics.dropped_message_count > 0);
     }
 
     #[test]
@@ -813,9 +897,45 @@ mod tests {
 
         let optimized = optimize_codex_request(&request);
         assert_eq!(
-            optimized.messages[0].tool_calls,
+            optimized.request.messages[0].tool_calls,
             request.messages[0].tool_calls
         );
+    }
+
+    #[test]
+    fn reports_metrics_for_trimmed_and_dropped_messages() {
+        let mut messages = vec![OpenAiChatMessage {
+            role: "system".to_string(),
+            content: Some("keep me".to_string()),
+            tool_call_id: None,
+            tool_calls: vec![],
+        }];
+        messages.extend((0..12).map(|index| OpenAiChatMessage {
+            role: if index == 0 {
+                "tool".to_string()
+            } else {
+                "user".to_string()
+            },
+            content: Some("z".repeat(DEFAULT_CODEX_PROMPT_BUDGET * 4)),
+            tool_call_id: (index == 0).then(|| "call_1".to_string()),
+            tool_calls: vec![],
+        }));
+
+        let optimized = optimize_codex_request(&OpenAiChatRequest {
+            model: "gpt-5.4".to_string(),
+            messages,
+            tools: vec![],
+            tool_choice: None,
+            stream: true,
+            max_tokens: None,
+        });
+
+        assert!(
+            optimized.metrics.estimated_prompt_tokens_before
+                > optimized.metrics.estimated_prompt_tokens_after
+        );
+        assert!(optimized.metrics.trimmed_message_count > 0);
+        assert!(optimized.metrics.dropped_message_count > 0);
     }
 
     #[test]

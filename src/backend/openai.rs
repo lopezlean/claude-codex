@@ -6,7 +6,9 @@ use futures_util::StreamExt;
 use reqwest::Client;
 use serde_json::Value;
 
-use crate::backend::provider::{BackendProvider, UpstreamResponse, UpstreamStream};
+use crate::backend::provider::{
+    BackendProvider, CodexPromptMetrics, UpstreamHeaders, UpstreamResponse, UpstreamStreamResponse,
+};
 use crate::models::EffortLevel;
 use crate::protocol::codex::{build_codex_request, CodexSseToOpenAiBridge};
 use crate::protocol::openai::OpenAiChatRequest;
@@ -64,7 +66,11 @@ impl OpenAiBackendProvider {
             .json()
             .await
             .context("failed to decode chat completions response body")?;
-        Ok(UpstreamResponse { status, body })
+        Ok(UpstreamResponse {
+            status,
+            body,
+            headers: UpstreamHeaders::default(),
+        })
     }
 
     async fn send_codex_non_stream(
@@ -73,8 +79,8 @@ impl OpenAiBackendProvider {
         request: &OpenAiChatRequest,
         effort: EffortLevel,
     ) -> Result<UpstreamResponse> {
-        let response = self
-            .build_codex_request(access_token, request, effort)
+        let (request_builder, metrics) = self.build_codex_request(access_token, request, effort);
+        let response = request_builder
             .send()
             .await
             .context("failed to call the Codex Responses API")?;
@@ -97,6 +103,7 @@ impl OpenAiBackendProvider {
         Ok(UpstreamResponse {
             status,
             body: bridge.into_chat_response(),
+            headers: codex_metrics_headers(&metrics),
         })
     }
 
@@ -105,20 +112,23 @@ impl OpenAiBackendProvider {
         access_token: &str,
         request: &OpenAiChatRequest,
         effort: EffortLevel,
-    ) -> Result<UpstreamStream> {
-        let response = self
-            .build_codex_request(access_token, request, effort)
+    ) -> Result<UpstreamStreamResponse> {
+        let (request_builder, metrics) = self.build_codex_request(access_token, request, effort);
+        let response = request_builder
             .send()
             .await
             .context("failed to call the Codex Responses API")?
             .error_for_status()
             .context("Codex Responses API returned a non-success status")?;
         let mut bridge = CodexSseToOpenAiBridge::default();
-        Ok(Box::pin(response.bytes_stream().map(move |chunk| {
-            let bytes = chunk.map_err(anyhow::Error::from)?;
-            let translated = bridge.push_bytes(&bytes)?;
-            Ok(bytes::Bytes::from(translated))
-        })))
+        Ok(UpstreamStreamResponse {
+            stream: Box::pin(response.bytes_stream().map(move |chunk| {
+                let bytes = chunk.map_err(anyhow::Error::from)?;
+                let translated = bridge.push_bytes(&bytes)?;
+                Ok(bytes::Bytes::from(translated))
+            })),
+            headers: codex_metrics_headers(&metrics),
+        })
     }
 
     fn build_codex_request(
@@ -126,7 +136,19 @@ impl OpenAiBackendProvider {
         access_token: &str,
         request: &OpenAiChatRequest,
         effort: EffortLevel,
-    ) -> reqwest::RequestBuilder {
+    ) -> (reqwest::RequestBuilder, CodexPromptMetrics) {
+        let codex_request = build_codex_request(request, effort.into());
+        tracing::info!(
+            model = %codex_request.request.model,
+            effort = ?effort,
+            estimated_prompt_tokens_before = codex_request.metrics.estimated_prompt_tokens_before,
+            estimated_prompt_tokens_after = codex_request.metrics.estimated_prompt_tokens_after,
+            trimmed_message_count = codex_request.metrics.trimmed_message_count,
+            dropped_message_count = codex_request.metrics.dropped_message_count,
+            trimmed_text_messages = codex_request.metrics.trimmed_text_messages,
+            trimmed_tool_result_messages = codex_request.metrics.trimmed_tool_result_messages,
+            "codex prompt optimization"
+        );
         let mut builder = self
             .client
             .post(self.codex_responses_url())
@@ -135,13 +157,13 @@ impl OpenAiBackendProvider {
             .header("originator", RESPONSES_ORIGINATOR)
             .header("User-Agent", RESPONSES_USER_AGENT)
             .header("accept", "text/event-stream")
-            .json(&build_codex_request(request, effort.into()));
+            .json(&codex_request.request);
 
         if let Some(account_id) = extract_account_id(access_token) {
             builder = builder.header("chatgpt-account-id", account_id);
         }
 
-        builder
+        (builder, codex_request.metrics)
     }
 
     fn codex_responses_url(&self) -> &str {
@@ -174,7 +196,7 @@ impl BackendProvider for OpenAiBackendProvider {
         access_token: &str,
         request: &OpenAiChatRequest,
         effort: EffortLevel,
-    ) -> Result<UpstreamStream> {
+    ) -> Result<UpstreamStreamResponse> {
         if Self::should_use_codex(access_token) {
             self.send_codex_stream(access_token, request, effort).await
         } else {
@@ -189,12 +211,46 @@ impl BackendProvider for OpenAiBackendProvider {
                 .send()
                 .await?
                 .error_for_status()?;
-            Ok(Box::pin(
-                response
-                    .bytes_stream()
-                    .map(|chunk| chunk.map_err(anyhow::Error::from)),
-            ))
+            Ok(UpstreamStreamResponse {
+                stream: Box::pin(
+                    response
+                        .bytes_stream()
+                        .map(|chunk| chunk.map_err(anyhow::Error::from)),
+                ),
+                headers: UpstreamHeaders::default(),
+            })
         }
+    }
+}
+
+fn codex_metrics_headers(metrics: &CodexPromptMetrics) -> UpstreamHeaders {
+    UpstreamHeaders {
+        entries: vec![
+            (
+                "x-claude-codex-prompt-tokens-before".to_string(),
+                metrics.estimated_prompt_tokens_before.to_string(),
+            ),
+            (
+                "x-claude-codex-prompt-tokens-after".to_string(),
+                metrics.estimated_prompt_tokens_after.to_string(),
+            ),
+            (
+                "x-claude-codex-trimmed-messages".to_string(),
+                metrics.trimmed_message_count.to_string(),
+            ),
+            (
+                "x-claude-codex-dropped-messages".to_string(),
+                metrics.dropped_message_count.to_string(),
+            ),
+            (
+                "x-claude-codex-trimmed-text-messages".to_string(),
+                metrics.trimmed_text_messages.to_string(),
+            ),
+            (
+                "x-claude-codex-trimmed-tool-results".to_string(),
+                metrics.trimmed_tool_result_messages.to_string(),
+            ),
+        ],
     }
 }
 
@@ -267,6 +323,11 @@ mod tests {
             response.body["choices"][0]["message"]["content"],
             "Hello from Codex"
         );
+        assert!(response
+            .headers
+            .entries
+            .iter()
+            .any(|(name, _)| name == "x-claude-codex-prompt-tokens-before"));
     }
 
     #[tokio::test]
@@ -331,9 +392,14 @@ mod tests {
             )
             .await
             .expect("oauth stream should use codex");
+        assert!(stream
+            .headers
+            .entries
+            .iter()
+            .any(|(name, _)| name == "x-claude-codex-prompt-tokens-after"));
 
         let mut collected = Vec::new();
-        while let Some(chunk) = stream.next().await {
+        while let Some(chunk) = stream.stream.next().await {
             collected.push(chunk.expect("chunk should decode"));
         }
 
@@ -382,6 +448,11 @@ mod tests {
             .expect("codex request should be optimized");
 
         assert_eq!(response.body["choices"][0]["message"]["content"], "Trimmed");
+        assert!(response
+            .headers
+            .entries
+            .iter()
+            .any(|(name, value)| { name == "x-claude-codex-trimmed-messages" && value != "0" }));
     }
 
     #[tokio::test]
@@ -418,6 +489,7 @@ mod tests {
             response.body["choices"][0]["message"]["content"],
             "Chat path unchanged"
         );
+        assert!(response.headers.entries.is_empty());
     }
 
     fn sample_request(model: &str) -> OpenAiChatRequest {

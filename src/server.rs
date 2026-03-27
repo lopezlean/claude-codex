@@ -321,6 +321,49 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn codex_responses_include_prompt_metric_headers() {
+        let _guard = lock_network_test();
+        let upstream = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/backend-api/codex/responses"))
+            .respond_with(ResponseTemplate::new(200).set_body_raw(
+                "event: response.output_text.delta\ndata: {\"delta\":\"Hello from Codex\"}\n\n\
+                 event: response.completed\ndata: {\"type\":\"response.completed\"}\n\n",
+                "text/event-stream",
+            ))
+            .mount(&upstream)
+            .await;
+
+        let router = build_router_for_test_with_token(&upstream.uri(), "ey.test.token").await;
+        let response = router
+            .oneshot(
+                axum::http::Request::post("/v1/messages")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        r#"{
+                          "model":"claude-3-5-sonnet-latest",
+                          "messages":[
+                            {"role":"user","content":[{"type":"text","text":"Older"}]},
+                            {"role":"user","content":[{"type":"text","text":"Recent"}]}
+                          ],
+                          "stream":false
+                        }"#,
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .expect("response");
+
+        assert_eq!(response.status(), axum::http::StatusCode::OK);
+        assert!(response
+            .headers()
+            .contains_key("x-claude-codex-prompt-tokens-before"));
+        assert!(response
+            .headers()
+            .contains_key("x-claude-codex-prompt-tokens-after"));
+    }
+
+    #[tokio::test]
     async fn streams_openai_tool_calls_as_anthropic_sse_events() {
         let _guard = lock_network_test();
         let upstream = MockServer::start().await;
@@ -535,6 +578,13 @@ mod tests {
     }
 
     async fn build_router_for_test(upstream_base_url: &str) -> axum::Router {
+        build_router_for_test_with_token(upstream_base_url, "access-token").await
+    }
+
+    async fn build_router_for_test_with_token(
+        upstream_base_url: &str,
+        access_token: &str,
+    ) -> axum::Router {
         let dir = tempfile::tempdir().expect("temp dir");
         let auth_dir = dir.keep();
         let auth_path = auth_dir.join("auth.json");
@@ -543,7 +593,7 @@ mod tests {
                 auth_mode: Some("openai".to_string()),
                 tokens: CodexTokens {
                     id_token: None,
-                    access_token: Some("access-token".to_string()),
+                    access_token: Some(access_token.to_string()),
                     refresh_token: None,
                     account_id: None,
                 },

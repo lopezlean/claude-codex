@@ -55,6 +55,7 @@ Model selection is backend-aware:
 - `--effort low|medium|high` is a wrapper-owned Codex-only flag
 - Codex sessions default effort to `medium`
 - Codex requests default to low text verbosity and automatic prompt trimming
+- Codex responses expose optimization metrics through `x-claude-codex-*` headers
 - Chat Completions sessions must reject explicit `--effort`
 
 ## Working Conventions
