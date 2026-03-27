@@ -54,6 +54,7 @@ Model selection is backend-aware:
 - unsupported models must fail before `claude` is launched
 - `--effort low|medium|high` is a wrapper-owned Codex-only flag
 - Codex sessions default effort to `medium`
+- Codex requests default to low text verbosity and automatic prompt trimming
 - Chat Completions sessions must reject explicit `--effort`
 
 ## Working Conventions

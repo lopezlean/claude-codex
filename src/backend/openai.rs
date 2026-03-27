@@ -222,7 +222,7 @@ fn extract_account_id(access_token: &str) -> Option<String> {
 mod tests {
     use futures_util::StreamExt;
     use serde_json::json;
-    use wiremock::matchers::{header, method, path};
+    use wiremock::matchers::{body_string_contains, header, method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     use super::{OpenAiBackendConfig, OpenAiBackendProvider};
@@ -240,6 +240,7 @@ mod tests {
         Mock::given(method("POST"))
             .and(path("/backend-api/codex/responses"))
             .and(header("OpenAI-Beta", "responses=experimental"))
+            .and(body_string_contains("\"verbosity\":\"low\""))
             .respond_with(ResponseTemplate::new(200).set_body_raw(
                 "event: response.output_text.delta\ndata: {\"delta\":\"Hello from Codex\"}\n\n\
                  event: response.completed\ndata: {\"type\":\"response.completed\"}\n\n",
@@ -347,6 +348,78 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn codex_requests_trim_older_prompt_content() {
+        let _guard = lock_network_test();
+        let upstream = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/backend-api/codex/responses"))
+            .and(body_string_contains(
+                "[tool result truncated by claude-codex]",
+            ))
+            .and(body_string_contains("[truncated by claude-codex]"))
+            .and(body_string_contains("\"verbosity\":\"low\""))
+            .respond_with(ResponseTemplate::new(200).set_body_raw(
+                "event: response.output_text.delta\ndata: {\"delta\":\"Trimmed\"}\n\n\
+                 event: response.completed\ndata: {\"type\":\"response.completed\"}\n\n",
+                "text/event-stream",
+            ))
+            .mount(&upstream)
+            .await;
+
+        let provider = OpenAiBackendProvider::new(OpenAiBackendConfig {
+            base_url: upstream.uri(),
+            chat_completions_path: "/v1/chat/completions".to_string(),
+            codex_responses_url: format!("{}/backend-api/codex/responses", upstream.uri()),
+        });
+        let response = provider
+            .send_chat(
+                "ey.token.value",
+                &large_codex_request(),
+                EffortLevel::Medium,
+            )
+            .await
+            .expect("codex request should be optimized");
+
+        assert_eq!(response.body["choices"][0]["message"]["content"], "Trimmed");
+    }
+
+    #[tokio::test]
+    async fn api_key_requests_keep_chat_completions_request_shape() {
+        let _guard = lock_network_test();
+        let upstream = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/chat/completions"))
+            .and(body_string_contains("\"content\":\"Hello\""))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "id": "chatcmpl_2",
+                "choices": [{
+                    "message": {
+                        "role": "assistant",
+                        "content": "Chat path unchanged",
+                        "tool_calls": []
+                    }
+                }]
+            })))
+            .mount(&upstream)
+            .await;
+
+        let provider = OpenAiBackendProvider::new(OpenAiBackendConfig {
+            base_url: upstream.uri(),
+            chat_completions_path: "/v1/chat/completions".to_string(),
+            codex_responses_url: format!("{}/backend-api/codex/responses", upstream.uri()),
+        });
+        let response = provider
+            .send_chat("sk-test", &sample_request("gpt-4o"), EffortLevel::Medium)
+            .await
+            .expect("api key path should remain unchanged");
+
+        assert_eq!(
+            response.body["choices"][0]["message"]["content"],
+            "Chat path unchanged"
+        );
+    }
+
     fn sample_request(model: &str) -> OpenAiChatRequest {
         OpenAiChatRequest {
             model: model.to_string(),
@@ -375,6 +448,51 @@ mod tests {
             tool_choice: None,
             stream: false,
             max_tokens: Some(128),
+        }
+    }
+
+    fn large_codex_request() -> OpenAiChatRequest {
+        let mut messages = vec![
+            OpenAiChatMessage {
+                role: "system".to_string(),
+                content: Some("You are concise and keep context.".to_string()),
+                tool_call_id: None,
+                tool_calls: vec![],
+            },
+            OpenAiChatMessage {
+                role: "user".to_string(),
+                content: Some(format!("older-text-{}", "x".repeat(1_500))),
+                tool_call_id: None,
+                tool_calls: vec![],
+            },
+            OpenAiChatMessage {
+                role: "tool".to_string(),
+                content: Some("y".repeat(900)),
+                tool_call_id: Some("call_old".to_string()),
+                tool_calls: vec![],
+            },
+        ];
+        messages.extend((0..8).map(|index| OpenAiChatMessage {
+            role: "user".to_string(),
+            content: Some(format!("recent-{index}")),
+            tool_call_id: None,
+            tool_calls: vec![],
+        }));
+
+        OpenAiChatRequest {
+            model: "gpt-5.4".to_string(),
+            messages,
+            tools: vec![OpenAiToolDefinition {
+                kind: "function".to_string(),
+                function: OpenAiToolFunction {
+                    name: "lookup_weather".to_string(),
+                    description: Some("Lookup the weather".to_string()),
+                    parameters: json!({"type":"object"}),
+                },
+            }],
+            tool_choice: None,
+            stream: false,
+            max_tokens: Some(256),
         }
     }
 }

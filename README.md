@@ -1,5 +1,14 @@
 # claude-codex
 
+```text
+      ▟████████▙
+     ▟█▛▀    ▀▀▀
+    ▟█▛    ▐▛███▜▌
+    ██▌    ▝▜█████▛▘
+    ▜█▙     ▘▘ ▝▝
+     ▜█▙▄    ▄▄▄
+      ▜████████▛
+
 `claude-codex` is a Rust wrapper for Claude Code that starts a local Anthropic-compatible proxy, injects the environment Claude Code expects, and translates requests to OpenAI-compatible backends.
 
 It is designed to give Claude Code users a local launch experience while keeping the backend pluggable for future AI providers.
@@ -119,6 +128,16 @@ Current effort behavior:
 - Supported values are `low`, `medium`, and `high`.
 - If omitted, Codex requests default to `medium`.
 - Chat Completions sessions do not emulate effort levels and fail early if `--effort` is provided.
+
+Current Codex optimization behavior:
+
+- Codex requests default to `text.verbosity = low`.
+- Codex request history is trimmed automatically before the Responses API call.
+- The newest 8 non-system messages are preserved unchanged.
+- Older text messages are capped to 1,200 characters.
+- Older tool-result messages are capped to 600 characters.
+- If the estimated prompt still exceeds the budget, the oldest non-system messages are dropped.
+- Chat Completions requests do not use this optimization pass.
 
 Current Codex catalog:
 

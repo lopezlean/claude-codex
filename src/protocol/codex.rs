@@ -4,6 +4,13 @@ use serde_json::{json, Value};
 
 use crate::protocol::openai::{OpenAiChatMessage, OpenAiChatRequest, OpenAiToolChoice};
 
+const DEFAULT_CODEX_PROMPT_BUDGET: usize = 12_000;
+const DEFAULT_PRESERVED_RECENT_MESSAGES: usize = 8;
+const DEFAULT_OLDER_TEXT_CHAR_LIMIT: usize = 1_200;
+const DEFAULT_OLDER_TOOL_RESULT_CHAR_LIMIT: usize = 600;
+const TEXT_TRUNCATION_MARKER: &str = "...[truncated by claude-codex]";
+const TOOL_RESULT_TRUNCATION_MARKER: &str = "...[tool result truncated by claude-codex]";
+
 #[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum CodexEffortLevel {
@@ -58,10 +65,11 @@ pub fn build_codex_request(
     request: &OpenAiChatRequest,
     effort: CodexEffortLevel,
 ) -> CodexResponsesRequest {
+    let optimized = optimize_codex_request(request);
     let mut instructions = Vec::new();
     let mut input = Vec::new();
 
-    for message in &request.messages {
+    for message in &optimized.messages {
         match message.role.as_str() {
             "system" => {
                 if let Some(content) = message
@@ -113,7 +121,7 @@ pub fn build_codex_request(
         }
     }
 
-    let tools = request
+    let tools = optimized
         .tools
         .iter()
         .map(|tool| CodexToolDecl {
@@ -125,20 +133,164 @@ pub fn build_codex_request(
         .collect();
 
     CodexResponsesRequest {
-        model: request.model.clone(),
+        model: optimized.model.clone(),
         store: false,
-        stream: true,
+        stream: optimized.stream,
         instructions: instructions.join("\n\n"),
         input,
         reasoning: CodexReasoningOptions { effort },
         text: CodexTextOptions {
-            verbosity: "medium".to_string(),
+            verbosity: "low".to_string(),
         },
         include: vec!["reasoning.encrypted_content".to_string()],
-        tool_choice: map_tool_choice(request.tool_choice.as_ref()),
+        tool_choice: map_tool_choice(optimized.tool_choice.as_ref()),
         parallel_tool_calls: true,
         tools,
     }
+}
+
+fn optimize_codex_request(request: &OpenAiChatRequest) -> OpenAiChatRequest {
+    let mut optimized = request.clone();
+    let system_indices = optimized
+        .messages
+        .iter()
+        .enumerate()
+        .filter_map(|(index, message)| (message.role == "system").then_some(index))
+        .collect::<Vec<_>>();
+    let non_system_indices = optimized
+        .messages
+        .iter()
+        .enumerate()
+        .filter_map(|(index, message)| (message.role != "system").then_some(index))
+        .collect::<Vec<_>>();
+
+    if non_system_indices.len() <= DEFAULT_PRESERVED_RECENT_MESSAGES {
+        return optimized;
+    }
+
+    let preserved_start = non_system_indices.len() - DEFAULT_PRESERVED_RECENT_MESSAGES;
+    let trimmable_indices = &non_system_indices[..preserved_start];
+
+    for &index in trimmable_indices {
+        trim_message(&mut optimized.messages[index]);
+    }
+
+    if estimate_codex_prompt_tokens(&optimized) <= DEFAULT_CODEX_PROMPT_BUDGET {
+        return optimized;
+    }
+
+    let mut keep_flags = vec![true; optimized.messages.len()];
+    for &index in &system_indices {
+        keep_flags[index] = true;
+    }
+
+    for &index in trimmable_indices {
+        if estimate_codex_prompt_tokens_with_flags(&optimized, &keep_flags)
+            <= DEFAULT_CODEX_PROMPT_BUDGET
+        {
+            break;
+        }
+        keep_flags[index] = false;
+    }
+
+    optimized.messages = optimized
+        .messages
+        .into_iter()
+        .enumerate()
+        .filter_map(|(index, message)| keep_flags[index].then_some(message))
+        .collect();
+    optimized
+}
+
+fn trim_message(message: &mut OpenAiChatMessage) {
+    if let Some(content) = message.content.take() {
+        let limit = if message.role == "tool" {
+            DEFAULT_OLDER_TOOL_RESULT_CHAR_LIMIT
+        } else {
+            DEFAULT_OLDER_TEXT_CHAR_LIMIT
+        };
+        let marker = if message.role == "tool" {
+            TOOL_RESULT_TRUNCATION_MARKER
+        } else {
+            TEXT_TRUNCATION_MARKER
+        };
+        message.content = Some(truncate_content(&content, limit, marker));
+    }
+}
+
+fn truncate_content(content: &str, limit: usize, marker: &str) -> String {
+    if content.chars().count() <= limit {
+        return content.to_string();
+    }
+
+    let marker_len = marker.chars().count();
+    if limit <= marker_len {
+        return marker.chars().take(limit).collect();
+    }
+
+    let prefix: String = content.chars().take(limit - marker_len).collect();
+    format!("{prefix}{marker}")
+}
+
+fn estimate_codex_prompt_tokens(request: &OpenAiChatRequest) -> usize {
+    let keep_flags = vec![true; request.messages.len()];
+    estimate_codex_prompt_tokens_with_flags(request, &keep_flags)
+}
+
+fn estimate_codex_prompt_tokens_with_flags(
+    request: &OpenAiChatRequest,
+    keep_flags: &[bool],
+) -> usize {
+    let message_tokens = request
+        .messages
+        .iter()
+        .enumerate()
+        .filter(|(index, _)| keep_flags.get(*index).copied().unwrap_or(true))
+        .map(|(_, message)| estimate_message_tokens(message))
+        .sum::<usize>();
+    let tool_tokens = request
+        .tools
+        .iter()
+        .map(|tool| serialized_token_estimate(tool))
+        .sum::<usize>();
+
+    message_tokens + tool_tokens
+}
+
+fn estimate_message_tokens(message: &OpenAiChatMessage) -> usize {
+    let role_tokens = string_token_estimate(&message.role);
+    let content_tokens = message
+        .content
+        .as_deref()
+        .map(string_token_estimate)
+        .unwrap_or(0);
+    let tool_call_id_tokens = message
+        .tool_call_id
+        .as_deref()
+        .map(string_token_estimate)
+        .unwrap_or(0);
+    let tool_call_tokens = message
+        .tool_calls
+        .iter()
+        .map(serialized_token_estimate)
+        .sum::<usize>();
+
+    role_tokens + content_tokens + tool_call_id_tokens + tool_call_tokens
+}
+
+fn string_token_estimate(value: &str) -> usize {
+    serialized_len_to_token_estimate(value.len())
+}
+
+fn serialized_token_estimate<T: Serialize>(value: &T) -> usize {
+    let len = serde_json::to_string(value)
+        .map(|json| json.len())
+        .unwrap_or_default();
+    serialized_len_to_token_estimate(len)
+}
+
+fn serialized_len_to_token_estimate(len: usize) -> usize {
+    len.div_ceil(4)
 }
 
 fn summarize_tool_result(message: &OpenAiChatMessage) -> String {
@@ -370,10 +522,15 @@ fn format_openai_stream_delta(delta: Value) -> String {
 mod tests {
     use serde_json::json;
 
-    use super::{build_codex_request, CodexEffortLevel, CodexSseToOpenAiBridge};
+    use super::{
+        build_codex_request, estimate_codex_prompt_tokens, optimize_codex_request,
+        CodexEffortLevel, CodexSseToOpenAiBridge, DEFAULT_CODEX_PROMPT_BUDGET,
+        DEFAULT_OLDER_TEXT_CHAR_LIMIT, DEFAULT_OLDER_TOOL_RESULT_CHAR_LIMIT,
+        DEFAULT_PRESERVED_RECENT_MESSAGES, TEXT_TRUNCATION_MARKER, TOOL_RESULT_TRUNCATION_MARKER,
+    };
     use crate::protocol::openai::{
-        OpenAiChatMessage, OpenAiChatRequest, OpenAiToolChoice, OpenAiToolDefinition,
-        OpenAiToolFunction,
+        OpenAiChatMessage, OpenAiChatRequest, OpenAiFunctionCall, OpenAiToolCall, OpenAiToolChoice,
+        OpenAiToolDefinition, OpenAiToolFunction,
     };
 
     #[test]
@@ -414,6 +571,7 @@ mod tests {
         assert_eq!(built.input[0].role, "user");
         assert_eq!(built.tools[0].name, "lookup_weather");
         assert_eq!(built.reasoning.effort, CodexEffortLevel::Medium);
+        assert_eq!(built.text.verbosity, "low");
     }
 
     #[test]
@@ -444,6 +602,220 @@ mod tests {
 
         let built = build_codex_request(&request, CodexEffortLevel::High);
         assert_eq!(built.reasoning.effort, CodexEffortLevel::High);
+    }
+
+    #[test]
+    fn estimator_counts_system_messages_and_tools() {
+        let request = OpenAiChatRequest {
+            model: "gpt-5.4".to_string(),
+            messages: vec![
+                OpenAiChatMessage {
+                    role: "system".to_string(),
+                    content: Some("You are concise.".to_string()),
+                    tool_call_id: None,
+                    tool_calls: vec![],
+                },
+                OpenAiChatMessage {
+                    role: "user".to_string(),
+                    content: Some("Hello".to_string()),
+                    tool_call_id: None,
+                    tool_calls: vec![],
+                },
+            ],
+            tools: vec![OpenAiToolDefinition {
+                kind: "function".to_string(),
+                function: OpenAiToolFunction {
+                    name: "lookup_weather".to_string(),
+                    description: Some("Lookup the weather".to_string()),
+                    parameters: json!({"type":"object","properties":{"city":{"type":"string"}}}),
+                },
+            }],
+            tool_choice: None,
+            stream: true,
+            max_tokens: None,
+        };
+
+        assert!(estimate_codex_prompt_tokens(&request) > 0);
+    }
+
+    #[test]
+    fn preserves_newest_non_system_messages_unchanged() {
+        let request = OpenAiChatRequest {
+            model: "gpt-5.4".to_string(),
+            messages: (0..10)
+                .map(|index| OpenAiChatMessage {
+                    role: "user".to_string(),
+                    content: Some(format!(
+                        "message-{index}-{}",
+                        "x".repeat(DEFAULT_OLDER_TEXT_CHAR_LIMIT + 200)
+                    )),
+                    tool_call_id: None,
+                    tool_calls: vec![],
+                })
+                .collect(),
+            tools: vec![],
+            tool_choice: None,
+            stream: true,
+            max_tokens: None,
+        };
+
+        let optimized = optimize_codex_request(&request);
+        let original_recent =
+            &request.messages[request.messages.len() - DEFAULT_PRESERVED_RECENT_MESSAGES..];
+        let optimized_recent =
+            &optimized.messages[optimized.messages.len() - DEFAULT_PRESERVED_RECENT_MESSAGES..];
+
+        assert_eq!(optimized_recent, original_recent);
+    }
+
+    #[test]
+    fn truncates_older_text_messages() {
+        let request = OpenAiChatRequest {
+            model: "gpt-5.4".to_string(),
+            messages: (0..10)
+                .map(|index| OpenAiChatMessage {
+                    role: "user".to_string(),
+                    content: Some(format!(
+                        "message-{index}-{}",
+                        "x".repeat(DEFAULT_OLDER_TEXT_CHAR_LIMIT + 200)
+                    )),
+                    tool_call_id: None,
+                    tool_calls: vec![],
+                })
+                .collect(),
+            tools: vec![],
+            tool_choice: None,
+            stream: true,
+            max_tokens: None,
+        };
+
+        let optimized = optimize_codex_request(&request);
+        let first = optimized.messages.first().expect("first message");
+        let first_content = first.content.as_deref().expect("content");
+
+        assert!(first_content.ends_with(TEXT_TRUNCATION_MARKER));
+        assert_eq!(first_content.chars().count(), DEFAULT_OLDER_TEXT_CHAR_LIMIT);
+    }
+
+    #[test]
+    fn truncates_older_tool_results() {
+        let mut messages = Vec::new();
+        messages.push(OpenAiChatMessage {
+            role: "tool".to_string(),
+            content: Some("y".repeat(DEFAULT_OLDER_TOOL_RESULT_CHAR_LIMIT + 200)),
+            tool_call_id: Some("call_123".to_string()),
+            tool_calls: vec![],
+        });
+        messages.extend((0..8).map(|index| OpenAiChatMessage {
+            role: "user".to_string(),
+            content: Some(format!("recent-{index}")),
+            tool_call_id: None,
+            tool_calls: vec![],
+        }));
+
+        let request = OpenAiChatRequest {
+            model: "gpt-5.4".to_string(),
+            messages,
+            tools: vec![],
+            tool_choice: None,
+            stream: true,
+            max_tokens: None,
+        };
+
+        let optimized = optimize_codex_request(&request);
+        let first_content = optimized.messages[0]
+            .content
+            .as_deref()
+            .expect("tool content");
+
+        assert!(first_content.ends_with(TOOL_RESULT_TRUNCATION_MARKER));
+        assert_eq!(
+            first_content.chars().count(),
+            DEFAULT_OLDER_TOOL_RESULT_CHAR_LIMIT
+        );
+    }
+
+    #[test]
+    fn drops_oldest_non_system_messages_when_trimming_is_not_enough() {
+        let mut messages = Vec::new();
+        messages.push(OpenAiChatMessage {
+            role: "system".to_string(),
+            content: Some("keep me".to_string()),
+            tool_call_id: None,
+            tool_calls: vec![],
+        });
+        messages.extend((0..20).map(|index| OpenAiChatMessage {
+            role: "user".to_string(),
+            content: Some(format!(
+                "old-{index}-{}",
+                "z".repeat(DEFAULT_CODEX_PROMPT_BUDGET * 8)
+            )),
+            tool_call_id: None,
+            tool_calls: vec![],
+        }));
+
+        let request = OpenAiChatRequest {
+            model: "gpt-5.4".to_string(),
+            messages,
+            tools: vec![],
+            tool_choice: None,
+            stream: true,
+            max_tokens: None,
+        };
+
+        let optimized = optimize_codex_request(&request);
+
+        assert_eq!(
+            optimized.messages[0].content.as_deref(),
+            Some("keep me"),
+            "system prompt should be preserved"
+        );
+        assert!(
+            optimized.messages.len() < request.messages.len(),
+            "older messages should have been dropped"
+        );
+        assert!(
+            optimized.messages.len() >= DEFAULT_PRESERVED_RECENT_MESSAGES + 1,
+            "newest preserved messages and system prompt should remain"
+        );
+    }
+
+    #[test]
+    fn preserves_assistant_tool_calls_when_optimizing() {
+        let request = OpenAiChatRequest {
+            model: "gpt-5.4".to_string(),
+            messages: vec![
+                OpenAiChatMessage {
+                    role: "assistant".to_string(),
+                    content: Some("I will call a tool".to_string()),
+                    tool_call_id: None,
+                    tool_calls: vec![OpenAiToolCall {
+                        id: "call_1".to_string(),
+                        kind: "function".to_string(),
+                        function: OpenAiFunctionCall {
+                            name: "lookup_weather".to_string(),
+                            arguments: "{\"city\":\"Madrid\"}".to_string(),
+                        },
+                    }],
+                },
+                OpenAiChatMessage {
+                    role: "user".to_string(),
+                    content: Some("recent".to_string()),
+                    tool_call_id: None,
+                    tool_calls: vec![],
+                },
+            ],
+            tools: vec![],
+            tool_choice: None,
+            stream: true,
+            max_tokens: None,
+        };
+
+        let optimized = optimize_codex_request(&request);
+        assert_eq!(
+            optimized.messages[0].tool_calls,
+            request.messages[0].tool_calls
+        );
     }
 
     #[test]
